@@ -265,6 +265,45 @@ test("verify --base fails when the intent exists only in the PR", async () => {
   });
 });
 
+test("verify --base passes a PR that only adds an intent file (config mode)", async () => {
+  await withTempRepo(async (dir) => {
+    writeConfig(dir);
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "base"], dir);
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    writeIntent(dir, ["src/**"], "next-task");
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "merge intent first"], dir);
+
+    const result = verifyBase(dir);
+    assert.equal(result.status, 0, `an intent-only PR must pass; stdout:\n${result.stdout}`);
+  });
+});
+
+test("verify --base fails a PR adding an intent plus code with no contract", async () => {
+  await withTempRepo(async (dir) => {
+    writeConfig(dir);
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "base"], dir);
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    writeIntent(dir, ["src/**"], "next-task");
+    writeTreeFile(dir, "src/x.js");
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "intent plus uncovered code"], dir);
+
+    const result = verifyBase(dir);
+    assert.equal(result.status, 1, `expected exit 1; stdout:\n${result.stdout}`);
+    assert.match(result.stdout, /FAIL scope/);
+    assert.match(result.stdout, /src\/x\.js/);
+    assert.ok(
+      !result.stdout.includes(".orchestration/intents/next-task.yml"),
+      "the intent file itself is doc-exempt",
+    );
+  });
+});
+
 test("verify --base fails when a PR rewrites an already-merged contract (merged-intent replay)", async () => {
   await withTempRepo(async (dir) => {
     writeConfig(dir);
@@ -422,7 +461,7 @@ test("verify without --base enforces working-tree intents", async () => {
   });
 });
 
-test("verify without --base fails when the working-tree intent is missing", async () => {
+test("verify without --base warns on a missing working-tree intent (pre-intent contract)", async () => {
   await withTempDir(async (dir) => {
     writeContract(dir, 'node -e "process.exit(0)"', ["src/a.js"]);
     const result = await runVerify({
@@ -431,13 +470,42 @@ test("verify without --base fails when the working-tree intent is missing", asyn
       gateMode: "config",
       cwd: dir,
     });
-    assert.equal(result.ok, false);
+    assert.equal(result.ok, true, "a missing intent must not fail local verification");
     const intentCheck = result.checks.find((c) => c.name.includes("intent"));
-    assert.equal(intentCheck.status, "FAIL");
+    assert.equal(intentCheck.status, "WARN");
     assert.match(
       intentCheck.detail,
-      /intent for demo not found at .orchestration\/intents\/demo\.yml/,
+      /no intent for demo \(pre-intent contract\); paths not enforced/,
     );
+  });
+});
+
+test("verify without --base still fails when the working-tree intent is invalid", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, ".orchestration", "intents"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orchestration", "intents", "demo.yml"),
+      [
+        "intent:",
+        '  goal: "A trivial task."',
+        "  scope:",
+        "    allowed_paths: []",
+        "consultation:",
+        "  requires_human_approval: false",
+        "",
+      ].join("\n"),
+    );
+    writeContract(dir, 'node -e "process.exit(0)"', ["src/a.js"]);
+    const result = await runVerify({
+      contractPaths: [".orchestration/contracts/demo.json"],
+      allowlist: ['node -e "process.exit(0)"'],
+      gateMode: "config",
+      cwd: dir,
+    });
+    assert.equal(result.ok, false, "a present-but-invalid intent must still fail");
+    const intentCheck = result.checks.find((c) => c.name.includes("intent"));
+    assert.equal(intentCheck.status, "FAIL");
+    assert.match(intentCheck.detail, /allowed_paths must be a non-empty array/);
   });
 });
 

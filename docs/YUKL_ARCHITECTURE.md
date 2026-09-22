@@ -190,13 +190,24 @@ files themselves are exempt because their path is derived from the verified
 `task_id`. A contract's `files_touched` must also be a subset of the files
 changed in the diff, and every diff file must be covered by a contract.
 
+The intent-first workflow is possible because `.orchestration/intents/**` is
+**doc-exempt**: a PR that only adds an intent file passes `verify --base`
+without a contract. That grants no scope by itself - an intent is a scope
+decision made by the human who merges it, and it takes effect only once it is
+merged into the base. In a PR that does carry contracts, a changed intent
+file is no longer exempt: it must be covered by a contract's `files_touched`
+and match that intent's own paths, like any other file.
+
 Without `--base`, `yukl verify` runs the same checks against the working
 tree. That local mode is a developer preview, not a trust boundary: it trusts
 the working-tree copies of the config and intents, and it checks every
-contract in the repository, so repositories carrying pre-split legacy
-contracts (tasks a-f here) fail local verification until their intents are
-written. The merge gate is unaffected: `verify --base` only ever checks
-contracts present in the diff.
+contract in the repository. A contract whose intent file is absent only gets
+a warning ("no intent for `<task_id>` (pre-intent contract); paths not
+enforced"), so repositories carrying pre-split legacy contracts (tasks a-f
+here) keep `npm run verify` green; a present-but-invalid intent or a path
+violation still fails. The `--base` gate is strict either way: a missing
+intent at the base ref still fails, and it only ever checks contracts
+present in the diff.
 
 The root `.yukl-intent.yml` is kept as a **legacy fallback for one release**,
 used only when `yukl.config.json` is absent, so repositories that predate the

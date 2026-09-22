@@ -31,7 +31,10 @@ export function isContractFile(path) {
 
 function isAllowedDocPath(path) {
   return (
-    path.startsWith("docs/") || /^[^/]+\.md$/.test(path) || path.startsWith(`${CONTRACTS_DIR}/`)
+    path.startsWith("docs/") ||
+    path.startsWith(`${INTENTS_DIR}/`) ||
+    /^[^/]+\.md$/.test(path) ||
+    path.startsWith(`${CONTRACTS_DIR}/`)
   );
 }
 
@@ -324,8 +327,9 @@ export function checkScope(diffFiles, contracts) {
 
 /**
  * Scope rules for a diff that carries no contract files: doc-exempt paths
- * (docs/**, root *.md, the contracts dir) need no contract coverage, but any
- * other changed file is a code change without a contract. Pure function.
+ * (docs/**, root *.md, .orchestration/intents/**, the contracts dir) need no
+ * contract coverage, but any other changed file is a code change without a
+ * contract. Pure function.
  */
 export function checkScopeWithoutContracts(diffFiles) {
   return { violations: diffFiles.filter((f) => !isAllowedDocPath(f)) };
@@ -463,7 +467,10 @@ export function resolveGateConfig({ base = null, cwd = process.cwd() } = {}) {
 /**
  * Read one contract's per-task intent and check its paths.
  * With `--base` the intent is read from the base ref via `git show`; without
- * it, from the working tree. Returns { intentError, pathViolations }.
+ * it, from the working tree.
+ * Returns { ok: true, doc } or { ok: false, missing, error } where `missing`
+ * distinguishes an absent intent file from a present-but-invalid one, so the
+ * caller can downgrade a missing intent to a warning in local mode only.
  */
 export function resolveIntentForContract({ taskId, base = null, cwd = process.cwd() } = {}) {
   const intentRelPath = `${INTENTS_DIR}/${taskId}.yml`;
@@ -471,8 +478,9 @@ export function resolveIntentForContract({ taskId, base = null, cwd = process.cw
     const shown = gitShowFile(base, intentRelPath, cwd);
     if (!shown.ok) {
       return {
-        intentError: `intent for ${taskId} not found at ${base}; merge the intent first`,
-        pathViolations: [],
+        ok: false,
+        missing: true,
+        error: `intent for ${taskId} not found at ${base}; merge the intent first`,
       };
     }
     return parseTaskIntent(shown.text, `${intentRelPath} at ${base}`);
@@ -480,8 +488,9 @@ export function resolveIntentForContract({ taskId, base = null, cwd = process.cw
   const intentAbs = resolve(cwd, intentRelPath);
   if (!existsSync(intentAbs)) {
     return {
-      intentError: `intent for ${taskId} not found at ${intentRelPath} (working tree); create it first`,
-      pathViolations: [],
+      ok: false,
+      missing: true,
+      error: `no intent for ${taskId} (pre-intent contract); paths not enforced`,
     };
   }
   return parseTaskIntent(readFileSync(intentAbs, "utf8"), intentRelPath);
@@ -493,15 +502,20 @@ function parseTaskIntent(text, sourceLabel) {
     doc = yaml.load(text);
   } catch (err) {
     return {
-      intentError: `cannot parse ${sourceLabel} as YAML: ${err.message}`,
-      pathViolations: [],
+      ok: false,
+      missing: false,
+      error: `cannot parse ${sourceLabel} as YAML: ${err.message}`,
     };
   }
   const violations = taskIntentViolations(doc);
   if (violations.length > 0) {
-    return { intentError: `${sourceLabel} schema: ${violations.join("; ")}`, pathViolations: [] };
+    return {
+      ok: false,
+      missing: false,
+      error: `${sourceLabel} schema: ${violations.join("; ")}`,
+    };
   }
-  return { intentError: null, pathViolations: [], doc };
+  return { ok: true, doc };
 }
 
 function runCommand(command, cwd, timeoutMs = 600000) {
@@ -667,7 +681,7 @@ export async function runVerify({
       // Docs-only PRs carry no contract files: only the scope check applies.
       const { violations } = checkScopeWithoutContracts(diffFiles);
       record(
-        "scope: every changed file is doc-exempt (docs/**, root *.md, contracts)",
+        "scope: every changed file is doc-exempt (docs/**, root *.md, .orchestration/intents/**, contracts)",
         violations.length === 0,
         violations.length > 0 ? violations.join(", ") : "",
       );
@@ -730,15 +744,27 @@ export async function runVerify({
     });
 
     if (gateMode === "config") {
-      const { intentError, doc: intentDoc } = resolveIntentForContract({
+      const resolution = resolveIntentForContract({
         taskId: data.task_id,
         base,
         cwd,
       });
-      if (intentError) {
-        record(`contract ${stem} intent`, false, intentError);
+      if (!resolution.ok) {
+        if (resolution.missing && base == null) {
+          // Local mode only: a contract that predates the intent split is
+          // downgraded to a warning, so `npm run verify` stays usable in
+          // repositories carrying pre-intent contracts. The --base gate is
+          // strict: a missing intent there still fails.
+          checks.push({
+            name: `contract ${stem} intent`,
+            status: "WARN",
+            detail: resolution.error,
+          });
+        } else {
+          record(`contract ${stem} intent`, false, resolution.error);
+        }
       } else {
-        const pathViolations = checkIntentPaths(data.files_touched, intentDoc);
+        const pathViolations = checkIntentPaths(data.files_touched, resolution.doc);
         record(
           `contract ${stem} paths`,
           pathViolations.length === 0,
@@ -794,7 +820,7 @@ export async function runVerify({
       "scope: code change is accompanied by a contract file",
       !scope.codeWithoutContract,
       scope.codeWithoutContract
-        ? "diff changes files outside docs/**, root *.md and .orchestration/contracts/** but adds or modifies no contract file"
+        ? "diff changes files outside docs/**, root *.md, .orchestration/intents/** and .orchestration/contracts/** but adds or modifies no contract file"
         : "",
     );
     const diffSet = new Set(diffFiles);
