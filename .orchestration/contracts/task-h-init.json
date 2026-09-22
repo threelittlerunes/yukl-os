@@ -1,0 +1,19 @@
+{
+  "task_id": "task-h-init",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/task-h-init.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "package.json",
+    "scripts/yukl.js",
+    "templates/yukl-ci.yml",
+    "templates/yukl-config.json",
+    "templates/yukl-section.md",
+    "tests/init.test.js"
+  ]
+}
