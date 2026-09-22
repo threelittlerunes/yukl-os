@@ -15,9 +15,9 @@
 - `node scripts/count-instructions.js`: Exit code 0 (PASS)
 
 ## 3. Instruction Budget
-- Current count: 66 instructions
+- Current count: 68 instructions
 - Limit: 150 instructions
-- Result: 66 < 150 (PASS)
+- Result: 68 < 150 (PASS)
 
 ## Final Verdict
 **PASS**
