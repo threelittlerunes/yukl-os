@@ -36,3 +36,14 @@
 4. A written review policy defines who may approve automated changes to `CLAUDE.md` and the rule files.
 5. A documented rollback path (Git revert) exists before any automated rule edit lands.
 6. The instruction-budget check passes on the proposed edit, so automated growth cannot silently breach the 150-instruction limit.
+
+### Open scoping questions (must be answered before planning)
+
+1. **Runtime dependency:** Prerequisite 2 (the contract-and-audit loop in active use) cannot be met until the render/verify runtime exists, because nothing has executed the pipeline end to end before it. Phase 5 is blocked on that runtime.
+2. **Human decisions:** Prerequisites 3 (a scoped GitHub token / App) and 4 (a written review policy for automated edits to `CLAUDE.md` and `AGENTS.md`) are decisions for the repository maintainer, not for the harness.
+3. **Signal definition:** Undecided which PR events count as a correction: review comments, commits that apply a suggested change, or reviews that request changes.
+4. **Digestion:** Summarising corrections requires an LLM call from GitHub Actions, which means an API secret, a cost budget, and a choice of model. All undecided.
+5. **Budget:** `CLAUDE.md` is capped at 60 lines and rule files carry instruction budgets (tests/rules.test.js). Automated proposals must pass `npm run test` or be rejected; they must never be truncated silently.
+6. **Scope:** Proposals must target `CLAUDE.md` and `AGENTS.md` together, because tests/agents.test.js requires the two files to remain identical.
+
+**Empirical acceptance criterion for starting Phase 5 planning:** `yukl verify` has passed on at least one merged PR in a repository using the harness.

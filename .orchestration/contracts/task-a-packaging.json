@@ -1,0 +1,14 @@
+{
+  "task_id": "task-a-packaging",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    "package.json",
+    "AGENTS.md",
+    "tests/agents.test.js",
+    "README.md",
+    ".orchestration/contracts/task-a-packaging.json"
+  ]
+}

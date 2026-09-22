@@ -4,7 +4,6 @@ node_modules/
 # Orchestration runtime output
 .orchestration/artifacts/*.log
 .orchestration/artifacts/*.log.gz
-.orchestration/contracts/*.json
 .orchestration/worktrees/
 .orchestration/locks/*.lock
 

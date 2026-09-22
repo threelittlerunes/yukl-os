@@ -1,0 +1,26 @@
+{
+  "task_id": "task-b-runtime",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".gitignore",
+    ".orchestration/contracts/task-b-runtime.json",
+    ".yukl-intent.yml",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "docs/SDLC_PLAN.md",
+    "package-lock.json",
+    "package.json",
+    "scripts/yukl.js",
+    "tests/fixtures/contract-bad-exit.json",
+    "tests/fixtures/contract-badschema.json",
+    "tests/fixtures/contract-good.json",
+    "tests/fixtures/contract-mismatch.json",
+    "tests/fixtures/contract-nonzero-expected.json",
+    "tests/fixtures/contract-notallowed.json",
+    "tests/yukl.test.js"
+  ]
+}

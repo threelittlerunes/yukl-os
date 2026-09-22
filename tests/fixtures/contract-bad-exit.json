@@ -1,0 +1,5 @@
+{
+  "task_id": "contract-bad-exit",
+  "empirical_proof": [{ "command": "node -e \"process.exit(3)\"", "expected_exit_code": 0 }],
+  "files_touched": ["tests/fixtures/contract-bad-exit.json"]
+}
