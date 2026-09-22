@@ -2,11 +2,15 @@
 // AF-1 / `npm run build`: static integrity validation for the harness.
 //
 // Validates the machine-readable harness configuration (flow.config.json,
-// .yukl-intent.yml) and delegates the repo-only governance checks (community
-// files, rule routing, instruction budgets, AGENTS.md parity) to
-// scripts/repo-checks.js. Exits non-zero on any failure.
+// yukl.config.json, .yukl-intent.yml, every .orchestration/intents/*.yml) and
+// delegates the repo-only governance checks (community files, rule routing,
+// instruction budgets, AGENTS.md parity) to scripts/repo-checks.js. Exits
+// non-zero on any failure.
 
-import { readJson, readYaml, CONTRACT_SCHEMA } from "./lib/harness.js";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { readJson, readYaml, ROOT, CONTRACT_SCHEMA } from "./lib/harness.js";
+import { INTENTS_DIR, taskIntentViolations, yuklConfigViolations } from "./yukl.js";
 import {
   ALLOWED_AGENTS,
   PLACEHOLDER_RE,
@@ -123,9 +127,48 @@ export function validateIntent() {
   return { errors };
 }
 
+/**
+ * Validate the repo-wide gate config (yukl.config.json). The shared schema
+ * lives in the installable core; this repo additionally requires the
+ * build/test/format command shortcuts so the harness can run its own gate.
+ */
+export function validateYuklConfig() {
+  const errors = [];
+  const raw = readJson("yukl.config.json");
+  errors.push(...yuklConfigViolations(raw).map((e) => `yukl.config.json: ${e}`));
+  const commands = raw?.commands ?? {};
+  for (const key of ["build", "test", "format"]) {
+    if (typeof commands[key] !== "string" || commands[key].trim() === "")
+      errors.push(
+        `yukl.config.json: commands.${key} must be a non-empty string (repo requirement)`,
+      );
+  }
+  return { errors };
+}
+
+/** List the per-task intent files under .orchestration/intents/, sorted. */
+export function listIntentFiles() {
+  return readdirSync(join(ROOT, INTENTS_DIR))
+    .filter((f) => /\.ya?ml$/.test(f))
+    .sort()
+    .map((f) => `${INTENTS_DIR}/${f}`);
+}
+
+/** Validate every per-task intent file (schema lives in the core). */
+export function validateIntents() {
+  const errors = [];
+  for (const relPath of listIntentFiles()) {
+    const doc = readYaml(relPath);
+    errors.push(...taskIntentViolations(doc).map((e) => `${relPath}: ${e}`));
+  }
+  return { errors };
+}
+
 export function validateAll() {
   const groups = {
     flowConfig: validateFlowConfig(),
+    yuklConfig: validateYuklConfig(),
+    intents: validateIntents(),
     intent: validateIntent(),
     rules: validateRules(),
     orca: validateOrcaYaml(),

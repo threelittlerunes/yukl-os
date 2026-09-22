@@ -174,6 +174,7 @@ test("verify from an unrelated directory does not read this package's contracts"
 test("verify --cwd points the gate at the target repository", async () => {
   await withTempRepo(async (dir) => {
     git(["checkout", "-q", "-b", "feature"], dir);
+    writeFileSync(join(dir, "flow.config.json"), JSON.stringify(featureConfig()));
     writeContract(dir, 'node -e "process.exit(0)"');
     git(["add", "-A"], dir);
     git(["commit", "-q", "-m", "add contract"], dir);

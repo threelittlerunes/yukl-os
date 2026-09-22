@@ -15,8 +15,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tracked in version control (tasks A, B and C).
 - Phase 5 scoping note in `docs/SDLC_PLAN.md` (task C).
 - `AGENTS.md` mirroring `CLAUDE.md` with a byte-identity sync test (task A).
+- Repo-wide gate config `yukl.config.json` (commands, folders, the
+  proof-command allowlist) and per-task intents at
+  `.orchestration/intents/<task_id>.yml` (goal, allowed and forbidden paths,
+  assumptions, consultation), validated by `npm run build` (task G).
+- `yukl verify` path enforcement: each file a contract covers must match the
+  task intent's `allowed_paths` and no `forbidden_paths` (forbidden wins),
+  matched by a small in-house glob (literal paths, `*` for one segment, `**`
+  for any depth); a contract's `files_touched` must be a subset of the diff
+  (task G).
 
 ### Changed
+- `yukl verify --base` now reads both the command allowlist and the task
+  intent from the base ref via `git show`, never from the working tree or
+  HEAD, so a PR cannot widen its own allowlist or path scope; an intent that
+  exists only in the PR fails with "intent for `<task_id>` not found at
+  `<base>`; merge the intent first" (task G).
+- The root `.yukl-intent.yml` is kept as a legacy fallback for one release,
+  used only when `yukl.config.json` is absent; without `--base`, verify reads
+  the working tree and is a developer preview rather than a trust boundary
+  (task G).
 - `yukl render` and `yukl verify` now resolve the target repository from
   `process.cwd()` or an explicit `--cwd` flag instead of the package directory,
   so the core runs inside any repository; the `render` reads-fallback looks for

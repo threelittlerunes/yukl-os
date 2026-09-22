@@ -19,6 +19,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import yaml from "js-yaml";
 
 export const CONTRACTS_DIR = ".orchestration/contracts";
+export const INTENTS_DIR = ".orchestration/intents";
+const YUKL_CONFIG_PATH = "yukl.config.json";
+const LEGACY_INTENT_PATH = ".yukl-intent.yml";
 const CONTRACT_FILE_RE = /^\.orchestration\/contracts\/[^/]+\.json$/;
 
 /** True when a repo-relative path is a contract file. */
@@ -30,6 +33,148 @@ function isAllowedDocPath(path) {
   return (
     path.startsWith("docs/") || /^[^/]+\.md$/.test(path) || path.startsWith(`${CONTRACTS_DIR}/`)
   );
+}
+
+// ---------------------------------------------------------------------------
+// path patterns (in-house glob matcher)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile a repo-relative path pattern into a RegExp. Supports three forms
+ * only, kept deliberately small so the gate has no glob dependency:
+ *   - literal segments ("CHANGELOG.md", "docs/YUKL_ARCHITECTURE.md")
+ *   - "*" matching within one segment ("tests/*.js" matches "tests/a.js" but
+ *     not "tests/x/y.js")
+ *   - "**" matching across any number of segments ("tests/**" matches
+ *     "tests/x/y.js")
+ * Patterns are anchored: they must match the whole path.
+ */
+export function globToRegExp(pattern) {
+  const segments = String(pattern).split("/");
+  let re = "^";
+  let skipJoin = false;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (!skipJoin && i > 0) re += "/";
+    skipJoin = false;
+    if (seg === "**") {
+      while (i + 1 < segments.length && segments[i + 1] === "**") i++;
+      if (i === segments.length - 1) {
+        re += "(?:.*)?";
+      } else {
+        re += "(?:[^/]+/)*";
+        skipJoin = true;
+      }
+    } else if (seg === "*") {
+      re += "[^/]*";
+    } else {
+      for (const ch of seg) {
+        re += ch === "*" ? "[^/]*" : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+    }
+  }
+  return new RegExp(`${re}$`);
+}
+
+/** True when a repo-relative path matches a pattern (see globToRegExp). */
+export function matchesGlob(path, pattern) {
+  return globToRegExp(pattern).test(String(path).replace(/\\/g, "/"));
+}
+
+// ---------------------------------------------------------------------------
+// gate configuration schemas
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema checks for yukl.config.json (repo-wide settings).
+ * Returns an array of violation strings (empty array = valid).
+ */
+export function yuklConfigViolations(data) {
+  const violations = [];
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    violations.push("root must be a JSON object");
+    return violations;
+  }
+  if (data.version !== 1) violations.push("version must be 1");
+  for (const [key, label] of [
+    ["commands", "commands"],
+    ["folders", "folders"],
+  ]) {
+    const block = data[key];
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      violations.push(`${label} must be a mapping of non-empty strings`);
+    } else {
+      for (const [k, v] of Object.entries(block)) {
+        if (typeof v !== "string" || v.trim() === "")
+          violations.push(`${label}.${k} must be a non-empty string`);
+      }
+    }
+  }
+  if (!Array.isArray(data.allowlist) || data.allowlist.length === 0) {
+    violations.push("allowlist must be a non-empty array");
+  } else if (!data.allowlist.every((c) => typeof c === "string" && c.trim() !== "")) {
+    violations.push("every allowlist entry must be a non-empty string");
+  }
+  return violations;
+}
+
+/**
+ * Schema checks for a per-task intent file (.orchestration/intents/<task_id>.yml).
+ * Returns an array of violation strings (empty array = valid).
+ */
+export function taskIntentViolations(doc) {
+  const violations = [];
+  if (!doc || typeof doc !== "object") {
+    violations.push("root must be a mapping");
+    return violations;
+  }
+  if (!doc.intent || typeof doc.intent !== "object") {
+    violations.push("intent block is required");
+  } else {
+    if (typeof doc.intent.goal !== "string" || doc.intent.goal.trim() === "")
+      violations.push("intent.goal must be a non-empty string");
+    const scope = doc.intent.scope;
+    if (!scope || !Array.isArray(scope.allowed_paths) || scope.allowed_paths.length === 0) {
+      violations.push("intent.scope.allowed_paths must be a non-empty array");
+    } else if (!scope.allowed_paths.every((p) => typeof p === "string" && p.trim() !== "")) {
+      violations.push("every allowed_paths entry must be a non-empty string");
+    }
+    if (scope?.forbidden_paths !== undefined) {
+      if (!Array.isArray(scope.forbidden_paths)) {
+        violations.push("intent.scope.forbidden_paths must be an array when present");
+      } else if (!scope.forbidden_paths.every((p) => typeof p === "string" && p.trim() !== "")) {
+        violations.push("every forbidden_paths entry must be a non-empty string");
+      }
+    }
+  }
+  if (!doc.consultation || typeof doc.consultation.requires_human_approval !== "boolean") {
+    violations.push("consultation.requires_human_approval must be a boolean");
+  }
+  return violations;
+}
+
+/**
+ * Path enforcement as a pure function: every `file` must match one
+ * `intent.intent.scope.allowed_paths` pattern and none of the
+ * `forbidden_paths` patterns (forbidden wins). Contract files are exempt:
+ * their path is derived from the verified task_id, not from the intent.
+ * Returns an array of violation strings (empty array = all files allowed).
+ */
+export function checkIntentPaths(files, intentDoc) {
+  const scope = intentDoc?.intent?.scope ?? {};
+  const allowed = Array.isArray(scope.allowed_paths) ? scope.allowed_paths : [];
+  const forbidden = Array.isArray(scope.forbidden_paths) ? scope.forbidden_paths : [];
+  const violations = [];
+  for (const file of files) {
+    if (isContractFile(file)) continue;
+    const forbiddenBy = forbidden.filter((p) => matchesGlob(file, p));
+    if (forbiddenBy.length > 0) {
+      violations.push(`${file} matches forbidden_paths (${forbiddenBy.join(", ")})`);
+    } else if (!allowed.some((p) => matchesGlob(file, p))) {
+      violations.push(`${file} matches no allowed_paths`);
+    }
+  }
+  return violations;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +384,126 @@ export function intentAllowlist(intentText) {
   return { ok: true, commands };
 }
 
+function gitShowFile(ref, relPath, cwd) {
+  const result = git(["show", `${ref}:${relPath}`], cwd);
+  if (result.status !== 0) {
+    return { ok: false, error: (result.stderr || "").trim() };
+  }
+  return { ok: true, text: result.stdout };
+}
+
+function parseYuklConfig(text, sourceLabel) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { ok: false, error: `cannot parse ${sourceLabel} as JSON` };
+  }
+  const violations = yuklConfigViolations(data);
+  if (violations.length > 0) {
+    return { ok: false, error: `${sourceLabel} schema: ${violations.join("; ")}` };
+  }
+  return { ok: true, allowlist: data.allowlist };
+}
+
+/**
+ * Resolve the proof-command allowlist and the gate mode for a verify run.
+ * With `--base` both yukl.config.json and (in legacy mode) .yukl-intent.yml
+ * are read from the base ref via `git show`, never from the working tree or
+ * HEAD: a PR cannot widen its own allowlist. Without `--base` the same files
+ * are read from the working tree, which makes local mode a developer preview
+ * rather than a trust boundary. When yukl.config.json is absent the legacy
+ * .yukl-intent.yml allowlist is used, so pre-split repositories keep working.
+ * Returns { ok: true, mode: "config"|"legacy", allowlist } or { ok: false, error }.
+ */
+export function resolveGateConfig({ base = null, cwd = process.cwd() } = {}) {
+  if (base != null) {
+    const config = gitShowFile(base, YUKL_CONFIG_PATH, cwd);
+    if (config.ok) {
+      return {
+        ...parseYuklConfig(config.text, `${YUKL_CONFIG_PATH} at ${base}`),
+        mode: "config",
+      };
+    }
+    const legacy = gitShowFile(base, LEGACY_INTENT_PATH, cwd);
+    if (legacy.ok) {
+      const parsed = intentAllowlist(legacy.text);
+      return parsed.ok
+        ? { ok: true, allowlist: parsed.commands, mode: "legacy" }
+        : { ok: false, error: parsed.error, mode: "legacy" };
+    }
+    return {
+      ok: false,
+      error: `cannot read ${YUKL_CONFIG_PATH} or ${LEGACY_INTENT_PATH} at ${base}: ${
+        config.error || legacy.error
+      }`,
+    };
+  }
+
+  const configPath = join(cwd, YUKL_CONFIG_PATH);
+  if (existsSync(configPath)) {
+    return {
+      ...parseYuklConfig(readFileSync(configPath, "utf8"), `${YUKL_CONFIG_PATH} (working tree)`),
+      mode: "config",
+    };
+  }
+  const legacyPath = join(cwd, LEGACY_INTENT_PATH);
+  if (existsSync(legacyPath)) {
+    const parsed = intentAllowlist(readFileSync(legacyPath, "utf8"));
+    return parsed.ok
+      ? { ok: true, allowlist: parsed.commands, mode: "legacy" }
+      : { ok: false, error: parsed.error, mode: "legacy" };
+  }
+  return {
+    ok: false,
+    error: `neither ${YUKL_CONFIG_PATH} nor ${LEGACY_INTENT_PATH} found in the working tree`,
+  };
+}
+
+/**
+ * Read one contract's per-task intent and check its paths.
+ * With `--base` the intent is read from the base ref via `git show`; without
+ * it, from the working tree. Returns { intentError, pathViolations }.
+ */
+export function resolveIntentForContract({ taskId, base = null, cwd = process.cwd() } = {}) {
+  const intentRelPath = `${INTENTS_DIR}/${taskId}.yml`;
+  if (base != null) {
+    const shown = gitShowFile(base, intentRelPath, cwd);
+    if (!shown.ok) {
+      return {
+        intentError: `intent for ${taskId} not found at ${base}; merge the intent first`,
+        pathViolations: [],
+      };
+    }
+    return parseTaskIntent(shown.text, `${intentRelPath} at ${base}`);
+  }
+  const intentAbs = resolve(cwd, intentRelPath);
+  if (!existsSync(intentAbs)) {
+    return {
+      intentError: `intent for ${taskId} not found at ${intentRelPath} (working tree); create it first`,
+      pathViolations: [],
+    };
+  }
+  return parseTaskIntent(readFileSync(intentAbs, "utf8"), intentRelPath);
+}
+
+function parseTaskIntent(text, sourceLabel) {
+  let doc;
+  try {
+    doc = yaml.load(text);
+  } catch (err) {
+    return {
+      intentError: `cannot parse ${sourceLabel} as YAML: ${err.message}`,
+      pathViolations: [],
+    };
+  }
+  const violations = taskIntentViolations(doc);
+  if (violations.length > 0) {
+    return { intentError: `${sourceLabel} schema: ${violations.join("; ")}`, pathViolations: [] };
+  }
+  return { intentError: null, pathViolations: [], doc };
+}
+
 function runCommand(command, cwd, timeoutMs = 600000) {
   return new Promise((resolvePromise) => {
     const child = spawn(command, {
@@ -317,17 +582,23 @@ export function vcsViolation(cwd) {
 
 /**
  * Run the Rational Persuasion gate.
- * `allowlist`, `diffFiles` and `porcelain` are injectable for tests; when null
- * the allowlist is read from .yukl-intent.yml (from the working tree, or from
- * --base via git show), the diff is computed from `git diff --base...HEAD` and
- * the working tree is inspected via `git status --porcelain`. `timeoutMs`
- * bounds each proof command (default 600000 ms).
+ * `allowlist`, `gateMode`, `diffFiles` and `porcelain` are injectable for
+ * tests. When `allowlist` is null, the gate config is resolved from
+ * yukl.config.json (or the legacy .yukl-intent.yml fallback) - from `--base`
+ * via git show, or from the working tree without `--base`; in "config" mode
+ * every verified contract must additionally have a per-task intent at
+ * .orchestration/intents/<task_id>.yml (read from the same source), and each
+ * file it covers must satisfy that intent's allowed/forbidden paths. The diff
+ * is computed from `git diff base...HEAD` and the working tree is inspected
+ * via `git status --porcelain`. `timeoutMs` bounds each proof command
+ * (default 600000 ms).
  * Returns { ok, checks: [{ name, status: "PASS"|"WARN"|"FAIL", detail }] }.
  */
 export async function runVerify({
   contractPaths = [],
   base = null,
   allowlist = null,
+  gateMode = null,
   diffFiles = null,
   porcelain = null,
   timeoutMs = 600000,
@@ -398,27 +669,13 @@ export async function runVerify({
   }
 
   if (allowlist == null) {
-    let intentText;
-    if (base != null) {
-      const result = git(["show", `${base}:.yukl-intent.yml`], cwd);
-      if (result.status !== 0) {
-        record(
-          "allowlist",
-          false,
-          `cannot read .yukl-intent.yml at ${base}: ${(result.stderr || "").trim()}`,
-        );
-        return { ok: false, checks };
-      }
-      intentText = result.stdout;
-    } else {
-      intentText = readFileSync(join(cwd, ".yukl-intent.yml"), "utf8");
-    }
-    const parsed = intentAllowlist(intentText);
-    if (!parsed.ok) {
-      record("allowlist", false, parsed.error);
+    const resolution = resolveGateConfig({ base, cwd });
+    if (!resolution.ok) {
+      record("allowlist", false, resolution.error);
       return { ok: false, checks };
     }
-    allowlist = parsed.commands;
+    allowlist = resolution.allowlist;
+    gateMode = resolution.mode;
   }
   const allowed = new Set(allowlist);
 
@@ -453,13 +710,31 @@ export async function runVerify({
       files_touched: data.files_touched,
     });
 
+    if (gateMode === "config") {
+      const { intentError, doc: intentDoc } = resolveIntentForContract({
+        taskId: data.task_id,
+        base,
+        cwd,
+      });
+      if (intentError) {
+        record(`contract ${stem} intent`, false, intentError);
+      } else {
+        const pathViolations = checkIntentPaths(data.files_touched, intentDoc);
+        record(
+          `contract ${stem} paths`,
+          pathViolations.length === 0,
+          pathViolations.length > 0 ? pathViolations.join(", ") : "",
+        );
+      }
+    }
+
     for (const [i, claim] of data.empirical_proof.entries()) {
       const label = `${stem} proof ${i + 1} "${claim.command}"`;
       if (!allowed.has(claim.command)) {
         record(
           `allowlist ${label}`,
           false,
-          "command is not in the .yukl-intent.yml empirical_proof allowlist; not executed",
+          "command is not in the proof-command allowlist (yukl.config.json, or the legacy .yukl-intent.yml); not executed",
         );
         continue;
       }
@@ -502,6 +777,15 @@ export async function runVerify({
       scope.codeWithoutContract
         ? "diff changes files outside docs/**, root *.md and .orchestration/contracts/** but adds or modifies no contract file"
         : "",
+    );
+    const diffSet = new Set(diffFiles);
+    const notInDiff = contracts.flatMap((c) =>
+      c.files_touched.filter((f) => !diffSet.has(f)).map((f) => `${c.task_id} lists ${f}`),
+    );
+    record(
+      "scope: files_touched only lists files changed in the diff",
+      notInDiff.length === 0,
+      notInDiff.length > 0 ? notInDiff.join(", ") : "",
     );
   }
 

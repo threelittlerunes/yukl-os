@@ -1,0 +1,21 @@
+{
+  "task_id": "task-g-config-intent",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/task-g-config-intent.json",
+    ".orchestration/intents/.gitkeep",
+    ".orchestration/intents/task-g-config-intent.yml",
+    "CHANGELOG.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "package.json",
+    "scripts/repo-checks.js",
+    "scripts/validate-config.js",
+    "scripts/yukl.js",
+    "tests/core-split.test.js",
+    "tests/intent-gate.test.js",
+    "yukl.config.json"
+  ]
+}

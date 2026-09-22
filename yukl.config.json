@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "commands": {
+    "build": "npm run build",
+    "test": "npm run test",
+    "format": "npm run format"
+  },
+  "folders": {
+    "contracts": ".orchestration/contracts",
+    "intents": ".orchestration/intents",
+    "locks": ".orchestration/locks",
+    "artifacts": ".orchestration/artifacts"
+  },
+  "allowlist": ["npm run build", "npm run test"]
+}
