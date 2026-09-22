@@ -23,6 +23,9 @@ export const ROOT = join(HERE, "..");
 export const CONTRACTS_DIR = ".orchestration/contracts";
 const CONTRACT_FILE_RE = /^\.orchestration\/contracts\/[^/]+\.json$/;
 
+/** Absolute path to the default pipeline configuration. */
+export const DEFAULT_FLOW_CONFIG = join(ROOT, "flow.config.json");
+
 /** True when a repo-relative path is a contract file. */
 export function isContractFile(path) {
   return CONTRACT_FILE_RE.test(path);
@@ -63,14 +66,30 @@ export function renderStage(configPath, stageId, taskId = null) {
 
   const byId = new Map(pipeline.map((s) => [s.id, s]));
 
+  // A reads id may reference a stage defined in the default pipeline
+  // (flow.config.json) when the given config is a different file, e.g.
+  // review.config.json reading the expert-power-drafter stage.
+  const searchedFallback =
+    resolve(configPath) !== resolve(DEFAULT_FLOW_CONFIG) && existsSync(DEFAULT_FLOW_CONFIG);
+  let fallbackPipeline = [];
+  if (searchedFallback) {
+    try {
+      const flowConfig = JSON.parse(readFileSync(DEFAULT_FLOW_CONFIG, "utf8"));
+      fallbackPipeline = Array.isArray(flowConfig?.pipeline) ? flowConfig.pipeline : [];
+    } catch {
+      fallbackPipeline = [];
+    }
+  }
+
   const writes = typeof stage.writes === "string" ? stage.writes : "";
   const readWrites = [];
   for (const readId of stage.reads ?? []) {
-    const readStage = byId.get(readId);
+    const readStage = byId.get(readId) ?? fallbackPipeline.find((s) => s?.id === readId);
     if (!readStage) {
+      const searched = searchedFallback ? `${configPath} or ${DEFAULT_FLOW_CONFIG}` : configPath;
       return {
         ok: false,
-        error: `stage "${readId}" listed in "reads" of "${stageId}" does not exist in ${configPath}`,
+        error: `stage "${readId}" listed in "reads" of "${stageId}" does not exist in ${searched}`,
       };
     }
     readWrites.push(typeof readStage.writes === "string" ? readStage.writes : "");

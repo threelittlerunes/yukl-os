@@ -56,6 +56,33 @@ test("render works for review.config.json", () => {
   assert.ok(result.spec.includes(".orchestration/artifacts/review-consensus.md"));
 });
 
+test("render resolves reads ids against flow.config.json when the given config lacks them", () => {
+  const result = renderStage(join(ROOT, "review.config.json"), "review-pass-a", "demo");
+  assert.equal(result.ok, true, result.error);
+  assert.ok(result.spec.includes(".orchestration/contracts/demo.json"));
+  assert.ok(!/[{}]/.test(result.spec), "no {placeholders} may remain");
+  assert.ok(!result.spec.includes("<task_id>"), "no <task_id> may remain");
+});
+
+test("render fails naming both configs when a reads id exists in neither", async () => {
+  await withTempDir(async (dir) => {
+    const configPath = join(dir, "other.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        pipeline: [
+          { id: "stage-a", writes: "out.md", reads: ["no-such-stage"], spec: "reads {reads}" },
+        ],
+      }),
+    );
+    const result = renderStage(configPath, "stage-a");
+    assert.equal(result.ok, false);
+    assert.match(result.error, /no-such-stage/);
+    assert.match(result.error, /other\.config\.json/);
+    assert.match(result.error, /flow\.config\.json/);
+  });
+});
+
 test("render fails on an unknown stage id", () => {
   const result = renderStage(join(ROOT, "flow.config.json"), "no-such-stage");
   assert.equal(result.ok, false);
@@ -96,6 +123,47 @@ test("render CLI prints the substituted spec to stdout", () => {
   assert.equal(result.status, 0);
   assert.ok(result.stdout.includes(".orchestration/contracts/demo.json"));
   assert.ok(!result.stdout.includes("<task_id>"));
+});
+
+test("render CLI resolves cross-config reads via flow.config.json", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/yukl.js",
+      "render",
+      "review-pass-a",
+      "--config",
+      "review.config.json",
+      "--task-id",
+      "demo",
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0);
+  assert.ok(result.stdout.includes(".orchestration/contracts/demo.json"));
+  assert.ok(!result.stdout.includes("{"), "no {placeholders} may remain");
+});
+
+test("render CLI exits 2 when a reads id exists in neither config", async () => {
+  await withTempDir(async (dir) => {
+    const configPath = join(dir, "other.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        pipeline: [
+          { id: "stage-a", writes: "out.md", reads: ["no-such-stage"], spec: "reads {reads}" },
+        ],
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/yukl.js", "render", "stage-a", "--config", configPath],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /no-such-stage/);
+    assert.match(result.stderr, /flow\.config\.json/);
+  });
 });
 
 // ---------------------------------------------------------------------------
