@@ -1,7 +1,7 @@
 # Yukl-OS: SDLC Implementation Plan
 
 ## Phase 1: Position Power & The "Vanilla" Sandbox
-**Situational Control (Native Sandboxing):** Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. There is one VCS in this repository: Git.
+**Situational Control (Native Sandboxing):** Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated.
 
 **Legitimate Power (The Orchestrator):** Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to enforce system boundaries and delegate work, preventing sub-agents from altering global project rules.
 

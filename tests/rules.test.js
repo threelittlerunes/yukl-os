@@ -39,7 +39,7 @@ test("all path-scoped rules declare frontmatter paths (IC-8)", () => {
   assert.deepEqual(errors, []);
 });
 
-test("no scanned document references Jujutsu, CONTRACT.json or Ecological Power (AF-5/6/7)", () => {
+test("no scanned document references CONTRACT.json or Ecological Power (AF-5/7)", () => {
   const { errors } = validateConsistency();
   assert.deepEqual(errors, []);
 });
