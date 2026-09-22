@@ -28,6 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ref with "contract `<task_id>` is already merged at `<base>`; an intent
   authorises one PR, so use a new task_id", so a PR cannot rewrite a merged
   contract to inherit that task's merged intent (task G).
+- `.orchestration/intents/**` is doc-exempt, so a PR that only adds an intent
+  file passes `verify --base` without a contract and the intent-first
+  workflow ("merge the intent first") can go through the gate; a PR carrying
+  contracts must still cover a changed intent file in `files_touched`
+  (task G).
 
 ### Changed
 - `yukl verify --base` now reads both the command allowlist and the task
@@ -37,8 +42,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `<base>`; merge the intent first" (task G).
 - The root `.yukl-intent.yml` is kept as a legacy fallback for one release,
   used only when `yukl.config.json` is absent; without `--base`, verify reads
-  the working tree and is a developer preview rather than a trust boundary
-  (task G).
+  the working tree and is a developer preview rather than a trust boundary,
+  and a contract whose intent file is absent gets a warning instead of a
+  failure, so repositories with pre-intent contracts keep `npm run verify`
+  green (task G).
 - `yukl render` and `yukl verify` now resolve the target repository from
   `process.cwd()` or an explicit `--cwd` flag instead of the package directory,
   so the core runs inside any repository; the `render` reads-fallback looks for
