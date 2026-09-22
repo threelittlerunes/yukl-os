@@ -1,0 +1,35 @@
+{
+  "//": "review.config.json — DUAL-PIPELINE A/B REVIEW MODE.",
+  "//note": "Two independent analysis passes run the same prompt template against the same implementation, then a consensus stage extracts agreement and flags divergent findings for human triage.",
+  "artifactsDir": ".orchestration/artifacts",
+  "pipeline": [
+    {
+      "id": "review-pass-a",
+      "title": "Independent Review Pass A",
+      "enabled": true,
+      "agent": "antigravity",
+      "writes": ".orchestration/artifacts/review-a.md",
+      "reads": ["expert-power-drafter"],
+      "spec": "You are an independent reviewer (pass A). Audit the implementation produced by the {reads} stage against the harness constitution and the Rational Persuasion contract. Report findings as P0/P1/P2 with file paths and evidence. Write the report to {out}. Do not read any other review output; this pass must stay independent."
+    },
+    {
+      "id": "review-pass-b",
+      "title": "Independent Review Pass B",
+      "enabled": true,
+      "agent": "antigravity",
+      "writes": ".orchestration/artifacts/review-b.md",
+      "reads": ["expert-power-drafter"],
+      "spec": "You are an independent reviewer (pass B). Audit the implementation produced by the {reads} stage against the harness constitution and the Rational Persuasion contract. Report findings as P0/P1/P2 with file paths and evidence. Write the report to {out}. Do not read any other review output; this pass must stay independent."
+    },
+    {
+      "id": "review-consensus",
+      "title": "Consensus Extraction",
+      "enabled": true,
+      "agent": "claude",
+      "writes": ".orchestration/artifacts/review-consensus.md",
+      "reads": ["review-pass-a", "review-pass-b"],
+      "gate": true,
+      "spec": "You are the Consensus Extractor. Read both independent reviews in {reads}. Merge findings both passes agree on into one verdict. Divergent findings must not be resolved by you: flag each one for human triage, quoting both positions. Write the result to {out}."
+    }
+  ]
+}
