@@ -137,3 +137,18 @@ silently dropped.
 
 This is an optional, documented capability. The default pipeline remains the
 single auditor in `flow.config.json`.
+
+### 3.4 Consensus-gating rule
+
+A single auditor pass is fallible, so the harness defines a consensus gate for
+severe findings. A **P0 or P1 finding from a single pass must be confirmed by a
+second, independent pass before it can block a merge**. Two passes that agree
+elevate the finding to a blocking verdict.
+
+A finding reported by only one pass is not silently dropped: it is escalated to
+human review, where a person decides whether it is real or a false positive.
+P2 findings never block a merge on their own.
+
+This section is design and documentation only. The rule takes effect when the
+Orca flow engine supports consensus gates (section 3.3); until then the single
+auditor in `flow.config.json` remains authoritative.
