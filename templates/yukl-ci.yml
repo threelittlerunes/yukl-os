@@ -1,0 +1,30 @@
+name: yukl
+
+on:
+  pull_request:
+
+jobs:
+  verify-contract:
+    name: Yukl contract gate (Rational Persuasion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+{PYTHON_SETUP}
+      - name: Run repository checks
+        run: |
+{CHECKS}
+      - name: Verify contracts (yukl)
+        run: |
+          if ! git cat-file -e "origin/${{ github.base_ref }}:yukl.config.json" 2>/dev/null; then
+            echo "bootstrap: harness not installed at base; this PR is gated by human review"
+            exit 0
+          fi
+          npm exec --yes --package="github:threelittlerunes/yukl-os#{YUKL_PIN}" -- yukl verify --base "origin/${{ github.base_ref }}"

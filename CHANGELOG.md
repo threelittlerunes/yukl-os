@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `yukl init`: installs the harness into a target repository on a feature
+  branch without overwriting anything it already has. It refuses (exit 1, no
+  writes) outside a Git repo, on the default branch, on a detached HEAD and on
+  a dirty working tree; in a colocated Jujutsu repo, where git HEAD is always
+  detached, it refuses only while the working-copy commit is still the default
+  branch's tip. It writes `yukl.config.json` (detected commands from
+  `package.json` scripts and a line-based `pyproject.toml` scan for `ruff
+  check` and `pytest`; undetected commands are `null`, never guessed), appends
+  a `<!-- yukl:begin -->`/`<!-- yukl:end -->` section to existing `CLAUDE.md`,
+  `AGENTS.md` and `GEMINI.md` files (missing files are skipped with a warning),
+  creates `.orchestration/contracts/.gitkeep` and
+  `.orchestration/intents/.gitkeep`, and installs a CI workflow at
+  `.github/workflows/yukl.yml` that runs the repo's detected checks and gates
+  the PR on `yukl verify --base origin/<base_ref>` (task H).
+- The generated CI runs a **commit-pinned** yukl (`npm exec --package=github:threelittlerunes/yukl-os#<sha>`)
+  taken from `--yukl-pin` or detected from the harness checkout, never a
+  floating ref. On the bootstrap PR (no `yukl.config.json` at the base ref)
+  the verify step prints "bootstrap: harness not installed at base; this PR
+  is gated by human review" and exits 0, so the first PR is gated by human
+  review alone and verify runs from the next PR on (task H).
+- `scripts/yukl.js` now decides whether it is the entry point by comparing
+  the realpaths of `import.meta.url` and `process.argv[1]`, so `main()` runs
+  through npm's `.bin` shim on Linux (symlink) and Windows (`.cmd` wrapper)
+  alike; proven by a test that installs `npm pack` output into a temp folder
+  and runs its `.bin/yukl` (task H).
 - Agent-agnostic runtime: `yukl render` and `yukl verify` (`scripts/yukl.js`)
   plus a `verify-contract` CI job for committed Rational Persuasion contracts,
   designed to be the merge gate and blocking merges once it is configured as a
