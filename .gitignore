@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Orchestration runtime output
+.orchestration/artifacts/*.log
+.orchestration/artifacts/*.log.gz
+.orchestration/worktrees/
+.orchestration/locks/*.lock
+
+# Packaging
+*.tgz
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

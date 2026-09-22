@@ -1,0 +1,69 @@
+{
+  "task_id": "task_1e32cc0ab1dc",
+  "dispatch_id": "ctx_c92129bcc676",
+  "agent": "opencode",
+  "role": "drafter",
+  "status": "complete",
+  "timestamp": "2026-09-22T07:50:57Z",
+  "summary": "Narrowed the path-scoped frontmatter of plan-drafter.md and independent-auditor.md to eliminate the docs/** rule scope bleed flagged in docs/REAUDIT_VERDICT.md, producing zero overlapping path scopes across all five rule files.",
+  "defect": {
+    "id": "rule-scope-bleed",
+    "source": "docs/REAUDIT_VERDICT.md",
+    "description": "plan-drafter.md and independent-auditor.md both declared paths: docs/**, so both rules were injected simultaneously whenever an agent touched any file under docs/."
+  },
+  "resolution": {
+    "plan-drafter.md": {
+      "paths_before": ["docs/**"],
+      "paths_after": ["docs/SDLC_PLAN.md"],
+      "body_change": "none (body already scoped to docs/SDLC_PLAN.md)"
+    },
+    "independent-auditor.md": {
+      "paths_before": ["docs/**"],
+      "paths_after": ["docs/AUDIT_REPORT.md", "docs/REAUDIT_VERDICT.md"],
+      "body_change": "Reworded the two body lines that referenced docs/** and docs/SDLC_PLAN.md so the prose matches the narrowed scope."
+    },
+    "coordinator_decision": "Original instruction listed .orchestration/contracts/*.json inside independent-auditor.md, which would have created a new overlap with auditor.md. Consulted the coordinator via `orca orchestration ask`; it selected option B (drop contracts) so auditor.md retains sole ownership of .orchestration/contracts/*.json and overlap is zero."
+  },
+  "scope": {
+    "created": [],
+    "modified": [
+      ".claude/rules/plan-drafter.md",
+      ".claude/rules/independent-auditor.md",
+      ".orchestration/contracts/current_task.json"
+    ],
+    "preserved_unmodified": [
+      ".claude/rules/auditor.md",
+      ".claude/rules/drafter-api.md",
+      ".claude/rules/drafter-ui.md",
+      "docs/SDLC_PLAN.md",
+      "docs/AUDIT_REPORT.md",
+      "docs/REAUDIT_VERDICT.md"
+    ]
+  },
+  "empirical_proof": [
+    {
+      "command": "node scripts/count-instructions.js",
+      "expected_exit_code": 0,
+      "observed_exit_code": 0,
+      "description": "Instruction budget OK; total 66 of 150 (independent-auditor.md 9/30, plan-drafter.md 5/30)."
+    },
+    {
+      "command": "npm run test",
+      "expected_exit_code": 0,
+      "observed_exit_code": 0,
+      "description": "Instruction-budget check plus the node --test suite: 12 pass, 0 fail."
+    },
+    {
+      "command": "npm run build",
+      "expected_exit_code": 0,
+      "observed_exit_code": 0,
+      "description": "Static harness validation (flow.config.json, .yukl-intent.yml, rule frontmatter, contract naming, single-VCS invariant, GitHub standards) passes."
+    },
+    {
+      "command": "node C:/Users/kjeld/AppData/Local/Temp/opencode/overlap-check.mjs",
+      "expected_exit_code": 0,
+      "observed_exit_code": 0,
+      "description": "Independent pairwise frontmatter path-scope check across all rule files: PAIR_OVERLAPS=[], no docs/** glob remains. Zero scope bleed."
+    }
+  ]
+}
