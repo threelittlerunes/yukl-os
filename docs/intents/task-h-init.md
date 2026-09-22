@@ -25,15 +25,16 @@ Forbidden: this repo's own `CLAUDE.md`, `AGENTS.md`, `.github/workflows/**`, `yu
 6. Idempotency: running init twice on a fixture gives no diff after the second run.
 7. Fixture tests cover a Node-only repo, a Python-only repo, a mixed repo, a repo with existing CLAUDE.md content, and each refusal case.
 8. The CLI entry point works through the npm bin shim. `scripts/yukl.js` only runs `main()` when `process.argv[1]` ends in `yukl.js`, but npm runs it as `node_modules/.bin/yukl` (a symlink on Linux and a `.cmd` wrapper on Windows), so the CLI probably does nothing there. This was found in the task f audit and is untested. A test runs `yukl` through an installed `.bin` shim (from `npm pack` plus an install into a temp folder) and checks that `verify` produces output.
+9. Bootstrap: `yukl init` writes `yukl.config.json` and `.orchestration/intents/`. On the first init PR, the base has neither `yukl.config.json` nor `.yukl-intent.yml`, so `verify --base` fails closed. The generated CI job checks for `yukl.config.json` at the base ref first (`git cat-file -e origin/<base_ref>:yukl.config.json`). When it is absent, the job skips `verify`, prints "bootstrap: harness not installed at base; this PR is gated by human review", and exits 0. From the next PR on, `verify` runs. Test both paths, with base lacking and having the config.
 
 ## Open questions
 
 1. When `CLAUDE.md`, `AGENTS.md` or `GEMINI.md` does not exist: create it with only the section, or skip it and warn. The plan says "existing", which suggests skip.
 2. How the target repo gets `yukl` in CI before it is published: a pinned Git URL (`npx github:threelittlerunes/yukl-os#<sha>`) or a vendored copy.
 
-## .yukl-intent.yml block
+## Machine-readable intent
 
-Written in the task g format once task g is merged.
+`.orchestration/intents/task-h-init.yml` is what `verify --base` enforces. It must be merged before the implementation PR. The block below is the pre-task-g draft, kept for the record.
 
 ```yaml
 intent:

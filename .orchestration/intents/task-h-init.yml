@@ -1,0 +1,35 @@
+intent:
+  # The overarching goal of the task (the "Why")
+  goal: "Add yukl init: install the harness into a target repo on a feature branch without overwriting existing files."
+
+  # Information Power: every file in the contract's files_touched must match
+  # an allowed_paths pattern and no forbidden_paths pattern (forbidden wins).
+  scope:
+    allowed_paths:
+      - "scripts/**"
+      - "templates/**"
+      - "tests/**"
+      - "package.json"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+    forbidden_paths:
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - ".claude/rules/**"
+      - ".github/**"
+      - "yukl.config.json"
+      - ".orchestration/intents/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "docs/intents/**"
+
+rational_persuasion:
+  # Assumptions the Auditor is invited to challenge.
+  assumptions:
+    - "The first init PR in a target repo has neither yukl.config.json nor .yukl-intent.yml at its base, so the generated CI job skips verify with an explicit bootstrap message, and that PR is gated by human review alone."
+    - "The npm .bin shim (a symlink on Linux, a .cmd wrapper on Windows) must reach main(); argv[1] ending in yukl.js is not a reliable entry check."
+
+consultation:
+  requires_human_approval: false
+  human_reviewer_tags: []
