@@ -1,0 +1,10 @@
+{
+  "task_id": "contract-notallowed",
+  "empirical_proof": [
+    {
+      "command": "node -e \"require('fs').writeFileSync('marker.txt','x')\"",
+      "expected_exit_code": 0
+    }
+  ],
+  "files_touched": ["tests/fixtures/contract-notallowed.json"]
+}

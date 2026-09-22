@@ -35,7 +35,7 @@ rational_persuasion:
   # The Drafter must explicitly state any assumptions made during implementation.
   # The Auditor will challenge these assumptions.
   assumptions:
-    - "The Orca flow engine substitutes {out} with the stage write path."
+    - "{out}, {reads} and <task_id> are substituted by `yukl render`; no agent runtime is assumed."
     - "A rule file is injected only when its frontmatter paths match the files being edited."
 
 consultation:

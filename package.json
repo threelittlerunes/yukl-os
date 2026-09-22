@@ -1,10 +1,13 @@
 {
   "name": "yukl-os",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "A power-based governance harness for the Orca Agentic SDLC. Maps French & Raven's bases of power and Yukl's influence tactics onto deterministic pipeline constraints.",
   "license": "MIT",
   "type": "module",
-  "private": false,
+  "private": true,
+  "bin": {
+    "yukl": "scripts/yukl.js"
+  },
   "author": "threelittlerunes",
   "repository": {
     "type": "git",
@@ -16,9 +19,11 @@
   },
   "files": [
     "flow.config.json",
+    "review.config.json",
     "orca.yaml",
     ".yukl-intent.yml",
     "INTENT.md",
+    "AGENTS.md",
     "scripts/",
     ".claude/",
     ".orchestration/artifacts/",
@@ -32,16 +37,19 @@
   },
   "scripts": {
     "build": "node scripts/validate-config.js",
-    "test": "node scripts/count-instructions.js && node --test tests/config.test.js tests/rules.test.js",
-    "test:config": "node --test tests/config.test.js tests/rules.test.js",
+    "test": "node scripts/count-instructions.js && node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js",
+    "test:config": "node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js",
     "test:budget": "node scripts/count-instructions.js",
+    "verify": "node scripts/yukl.js verify",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint ."
   },
-  "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
+  "dependencies": {
     "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4"
   },
   "keywords": ["orca", "agentic-sdlc", "yukl", "power-harness", "ai-governance"]
 }

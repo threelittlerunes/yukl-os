@@ -30,6 +30,38 @@ Every pull request must carry empirical proof:
 instruction-budget check (`node scripts/count-instructions.js`) must still pass;
 if it does not, trim the rule rather than raising the budget silently.
 
+## Contracts and the verify gate
+
+Proof files are committed. Every task writes its empirical proof to
+`.orchestration/contracts/<task_id>.json`, and that file is part of the pull
+request. CI runs a `verify-contract` job (`node scripts/yukl.js verify --base
+origin/main` on pull requests). The job is designed to be the merge gate and
+blocks merges once it is configured as a required status check on the default
+branch: enable GitHub branch protection and require the check named "Verify
+contracts (Rational Persuasion gate)", and merges are blocked unless every
+changed file is covered by a committed contract and every proof command is
+allowlisted.
+
+Commands are allowlisted. `yukl verify` never executes a command that is not an
+exact entry in `rational_persuasion.empirical_proof` in `.yukl-intent.yml`.
+With `--base`, the allowlist is read from the base branch, so a pull request
+cannot widen its own allowlist. The allowlist limits which proof commands a
+contract may claim; it is not a sandbox - allowlisted commands such as
+`npm run test` execute the pull request's own code, as the existing `validate`
+job already does.
+
+For an early warning before you push, run the gate locally:
+
+```sh
+npm run verify -- --base origin/main
+```
+
+This is a preview only and it checks committed state only (base...HEAD):
+uncommitted or untracked changes are invisible to it, and it prints a warning
+when the working tree is dirty. Commit first for an accurate preview. The CI
+job is designed to be the merge gate and blocks merges once it is configured as
+a required status check on the default branch.
+
 ## Changing the harness
 
 - **Rules** live in `.claude/rules/`. Every rule file needs YAML frontmatter with
