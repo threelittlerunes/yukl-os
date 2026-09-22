@@ -59,6 +59,36 @@ Edit `INTENT.md` with a one or two sentence objective. When you start the flow, 
 
 ## How It Works
 
+```mermaid
+flowchart TD
+    classDef default fill:#f8f9fa,stroke:#dee2e6,stroke-width:1px,color:#212529;
+    classDef agent fill:#ffffff,stroke:#343a40,stroke-width:2px,color:#212529,font-weight:bold;
+    classDef contract fill:#e9ecef,stroke:#adb5bd,stroke-width:1px,color:#495057;
+
+    Intent["System Intent (INTENT.md)<br/><i>[Yukl: Consultation]</i>"]
+    
+    subgraph Governance ["Governance Layer <i>[Legitimate Power]</i>"]
+        Scope["Scope Lock Broker<br/><i>[Situational Control]</i>"]
+        Rules["Progressive Disclosure<br/><i>[Informational Power]</i>"]
+    end
+    
+    Drafter{"Drafter Agent (Isolated Worktree)<br/><i>[Expert Power]</i>"}:::agent
+    
+    Contract["Empirical Proof Contract<br/><i>[Yukl: Rational Persuasion]</i>"]:::contract
+    
+    Auditor{"Auditor Agent (Final Gate)<br/><i>[Expert Power]</i>"}:::agent
+    
+    Merge(["Integration & Merge"])
+    
+    Intent --> Governance
+    Governance --> Drafter
+    Drafter -->|Generates verifiable proof| Contract
+    Contract --> Auditor
+    
+    Auditor -->|Pass| Merge
+    Auditor -- "Fail (Process Kill & Retry)<br/>[Coercive Power]" --> Drafter
+```
+
 Yukl-OS draws on two distinct organisational-psychology frameworks: **French & Raven's six bases of power** (where influence comes from) and **Yukl's eleven influence tactics** (how influence is attempted). The harness maps each mechanism onto one concept from those frameworks.
 
 | Harness mechanism | Framework | Concept |
