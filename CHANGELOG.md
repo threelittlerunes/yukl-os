@@ -19,11 +19,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - `{out}`, `{reads}` and `<task_id>` are substituted by `yukl render`; no agent
   runtime is assumed (task B).
+- `docs/YUKL_ARCHITECTURE.md` section 3.4 no longer claims an Orca flow engine
+  will enforce the consensus gate; the rule is documented as review policy on
+  top of the `verify-contract` and `validate` CI merge gate (task D).
 - `js-yaml` moved to `dependencies`: the verify runtime parses
   `.yukl-intent.yml` (task B).
 - `package.json` marked private at version 2.1.0 (task A).
 
 ### Fixed
+- `yukl render` resolves `reads` ids against `flow.config.json` when the given
+  `--config` does not define the stage, so cross-config renders such as
+  `review-pass-a --config review.config.json` no longer exit 2 (task D).
 - `yukl verify` rejects any `expected_exit_code` other than 0, closing a gate
   bypass where a failing test could be claimed as passing proof (task B2).
 - Docs-only pull requests pass `yukl verify --base` without a contract file;
