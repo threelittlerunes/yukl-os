@@ -1,0 +1,47 @@
+{
+  "//": "flow.config.json — ADVANCED YUKL POWER HARNESS PIPELINE.",
+  "//architecture": "See docs/YUKL_ARCHITECTURE.md for the theoretical underpinning of this exact schema.",
+  "//contracts": "Every stage-level proof is written to .orchestration/contracts/<task_id>.json (AF-7).",
+  "artifactsDir": ".orchestration/artifacts",
+  "maxRetries": 3,
+  "autoRun": true,
+  "defaults": {
+    "timeoutMs": 900000,
+    "worktree": null,
+    "model": "default",
+    "readinessMinBytes": 200
+  },
+  "pipeline": [
+    {
+      "id": "legitimate-power-router",
+      "title": "Legitimate Power (Scope Interrogation)",
+      "enabled": true,
+      "agent": "claude",
+      "interactive": true,
+      "writes": ".orchestration/artifacts/scope_contract.md",
+      "reads": [],
+      "spec": "You are the Executive Orchestrator. Interrogate the user to establish the Information Power boundary. Identify the precise 'paths' this task is allowed to touch. Output the strict boundaries to {out} so progressive disclosure routing can take effect."
+    },
+    {
+      "id": "expert-power-drafter",
+      "title": "Expert Power (Isolated Implementation)",
+      "enabled": true,
+      "agent": "opencode",
+      "writes": ".orchestration/contracts/<task_id>.json",
+      "reads": ["legitimate-power-router"],
+      "onFailGoto": null,
+      "spec": "You are the Drafter. 1. You operate in an isolated Git worktree. 2. Implement the feature restricted entirely to the {reads} boundaries. 3. If you must run a package manager, you MUST acquire a lock in .orchestration/locks/. 4. Exercise Rational Persuasion: when finished, write {out} as a JSON payload containing the exact 'empirical_proof' terminal commands required to verify your work."
+    },
+    {
+      "id": "coercive-power-auditor",
+      "title": "Coercive Power (Contract Verification)",
+      "enabled": true,
+      "agent": "claude",
+      "writes": ".orchestration/artifacts/verdict.md",
+      "reads": ["expert-power-drafter", "legitimate-power-router"],
+      "gate": true,
+      "onFailGoto": "expert-power-drafter",
+      "spec": "You are the Auditor. You wield Expert Power (independent specialist judgement) and Coercive Power. Read the .orchestration/contracts/<task_id>.json generated in {reads}. Execute the empirical proof commands in your terminal. If the Drafter failed the tests, or if they violated the path-scope defined by the Orchestrator, exercise Coercive Power by reporting FAIL (outcome=failed) with the stderr log. This will force the Drafter into a retry loop."
+    }
+  ]
+}

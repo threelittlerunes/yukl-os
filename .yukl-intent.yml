@@ -1,0 +1,45 @@
+# .yukl-intent.yml
+# The implementation of Rational Persuasion & Consultation.
+#
+# RULE: The Drafter agent MUST complete this file before requesting an Audit.
+# RULE: The Auditor agent MUST autonomously verify these claims before approving the PR.
+# RULE: If the empirical proof fails, the Auditor exercises Coercive Power and rejects the work.
+
+intent:
+  # The overarching goal of the task (The "Why")
+  goal: "Add path-scoped UI drafter rules and enforce the instruction budget across the harness."
+
+  # Information Power: What specific files is the agent permitted to touch?
+  # This prevents context dilution and blast-radius escalation.
+  scope:
+    allowed_paths:
+      - ".claude/rules/**"
+      - "scripts/**"
+      - "tests/**"
+    forbidden_paths:
+      - "src/db/migrations/**"
+      - "infra/**"
+
+rational_persuasion:
+  # Empirical Verification: "Vibes do not merge PRs."
+  # The Drafter must provide executable proof that the task is complete.
+  empirical_proof:
+    - command: "npm run test"
+      expected_exit_code: 0
+      description: "The harness test suite and instruction-budget check must pass."
+
+    - command: "npm run build"
+      expected_exit_code: 0
+      description: "The harness configuration must pass static validation."
+
+  # The Drafter must explicitly state any assumptions made during implementation.
+  # The Auditor will challenge these assumptions.
+  assumptions:
+    - "The Orca flow engine substitutes {out} with the stage write path."
+    - "A rule file is injected only when its frontmatter paths match the files being edited."
+
+consultation:
+  # Does this change touch highly sensitive code (e.g., Auth, Database schemas)?
+  # If yes, it triggers Human-in-the-Loop scaling.
+  requires_human_approval: false
+  human_reviewer_tags: []
