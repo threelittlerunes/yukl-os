@@ -147,7 +147,7 @@ export function contractViolations(contractPath, data) {
       if (typeof claim?.expected_exit_code !== "number") {
         violations.push(`empirical_proof[${i}].expected_exit_code must be a number`);
       } else if (claim.expected_exit_code !== 0) {
-        violations.push(`empirical_proof[${i}].expected_exit_code must be 0 (CLAUDE.md section 3)`);
+        violations.push(`empirical_proof[${i}].expected_exit_code must be 0`);
       }
     });
   }
