@@ -38,6 +38,5 @@ Every pull request must prove its own correctness.
 - [ ] `npm run build` passes.
 - [ ] `npm run format` applied.
 - [ ] Contract filenames use `.orchestration/contracts/<task_id>.json`.
-- [ ] No Jujutsu/`jj` references re-introduced (Git worktrees only).
 - [ ] French & Raven bases and Yukl tactics are not conflated.
 - [ ] I have not approved my own work; an independent review is required.

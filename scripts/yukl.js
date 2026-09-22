@@ -291,6 +291,25 @@ function gitDiffFiles(base, cwd) {
 }
 
 /**
+ * Refuse a Jujutsu-only repository. A repo root with `.jj` but no `.git`
+ * (file or directory) has no Git metadata, so `git diff` and `git show`
+ * cannot run. Colocated mode (`jj git init --colocate`) keeps a `.git` next
+ * to `.jj` and is fine; a secondary `jj workspace add` has no `.git` and is
+ * refused. Returns null when the layout is acceptable. Pure function.
+ */
+export function vcsViolation(cwd) {
+  const hasJujutsu = existsSync(join(cwd, ".jj"));
+  const hasGit = existsSync(join(cwd, ".git"));
+  if (hasJujutsu && !hasGit) {
+    return (
+      "Jujutsu-only repository: .jj exists but .git does not (as file or directory). " +
+      "yukl verify requires Git metadata; run jj git init --colocate to export commits to Git."
+    );
+  }
+  return null;
+}
+
+/**
  * Run the Rational Persuasion gate.
  * `allowlist`, `diffFiles` and `porcelain` are injectable for tests; when null
  * the allowlist is read from .yukl-intent.yml (from the working tree, or from
@@ -311,6 +330,13 @@ export async function runVerify({
   const checks = [];
   const record = (name, ok, detail = "") =>
     checks.push({ name, status: ok ? "PASS" : "FAIL", detail });
+
+  const vcsError = vcsViolation(cwd);
+  if (vcsError) {
+    record("repo has Git metadata (colocated Jujutsu supported)", false, vcsError);
+    return { ok: false, checks };
+  }
+  record("repo has Git metadata (colocated Jujutsu supported)", true);
 
   if (base != null) {
     if (porcelain == null) {
