@@ -1,0 +1,22 @@
+{
+  "task_id": "task-f-core-split",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/task-f-core-split.json",
+    "CHANGELOG.md",
+    "package.json",
+    "scripts/count-instructions.js",
+    "scripts/lib/harness.js",
+    "scripts/repo-checks.js",
+    "scripts/validate-config.js",
+    "scripts/yukl.js",
+    "tests/agents.test.js",
+    "tests/config.test.js",
+    "tests/core-split.test.js",
+    "tests/rules.test.js",
+    "tests/yukl.test.js"
+  ]
+}

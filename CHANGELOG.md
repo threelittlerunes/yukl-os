@@ -17,6 +17,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `AGENTS.md` mirroring `CLAUDE.md` with a byte-identity sync test (task A).
 
 ### Changed
+- `yukl render` and `yukl verify` now resolve the target repository from
+  `process.cwd()` or an explicit `--cwd` flag instead of the package directory,
+  so the core runs inside any repository; the `render` reads-fallback looks for
+  `flow.config.json` next to the given config (task F).
+- Repo-only governance checks (community files, rule routing, CLAUDE.md/AGENTS.md
+  parity, instruction budgets) moved out of the installable core into
+  `scripts/repo-checks.js`, which only this repo's `npm run build` and
+  `npm run test` call (task F).
 - `{out}`, `{reads}` and `<task_id>` are substituted by `yukl render`; no agent
   runtime is assumed (task B).
 - `docs/YUKL_ARCHITECTURE.md` section 3.4 no longer claims an Orca flow engine

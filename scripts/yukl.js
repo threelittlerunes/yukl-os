@@ -1,30 +1,25 @@
 #!/usr/bin/env node
 // yukl - agent-agnostic runtime for the Yukl Power Harness.
 //
-//   yukl render <stage-id> [--config <path>] [--task-id <id>]
-//   yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>]
+//   yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]
+//   yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]
 //
 // The binding layer is deterministic checks, not prompts. `render` expands a
 // pipeline stage spec for any agent runtime (Claude Code, OpenCode, Antigravity,
 // Orca or none); `verify` enforces the Rational Persuasion contract and is
 // designed to be the merge gate a CI job runs on pull requests.
+//
+// The target repository is always resolved from the caller's working directory
+// (`process.cwd()`) or an explicit --cwd flag, never from the directory this
+// package is installed in.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-
-/** Absolute path to the repository root. */
-export const ROOT = join(HERE, "..");
 
 export const CONTRACTS_DIR = ".orchestration/contracts";
 const CONTRACT_FILE_RE = /^\.orchestration\/contracts\/[^/]+\.json$/;
-
-/** Absolute path to the default pipeline configuration. */
-export const DEFAULT_FLOW_CONFIG = join(ROOT, "flow.config.json");
 
 /** True when a repo-relative path is a contract file. */
 export function isContractFile(path) {
@@ -68,13 +63,16 @@ export function renderStage(configPath, stageId, taskId = null) {
 
   // A reads id may reference a stage defined in the default pipeline
   // (flow.config.json) when the given config is a different file, e.g.
-  // review.config.json reading the expert-power-drafter stage.
+  // review.config.json reading the expert-power-drafter stage. The fallback
+  // lives next to the given config (i.e. in the target repository), not in
+  // the directory this package happens to be installed in.
+  const fallbackConfigPath = join(dirname(resolve(configPath)), "flow.config.json");
   const searchedFallback =
-    resolve(configPath) !== resolve(DEFAULT_FLOW_CONFIG) && existsSync(DEFAULT_FLOW_CONFIG);
+    resolve(configPath) !== resolve(fallbackConfigPath) && existsSync(fallbackConfigPath);
   let fallbackPipeline = [];
   if (searchedFallback) {
     try {
-      const flowConfig = JSON.parse(readFileSync(DEFAULT_FLOW_CONFIG, "utf8"));
+      const flowConfig = JSON.parse(readFileSync(fallbackConfigPath, "utf8"));
       fallbackPipeline = Array.isArray(flowConfig?.pipeline) ? flowConfig.pipeline : [];
     } catch {
       fallbackPipeline = [];
@@ -86,7 +84,7 @@ export function renderStage(configPath, stageId, taskId = null) {
   for (const readId of stage.reads ?? []) {
     const readStage = byId.get(readId) ?? fallbackPipeline.find((s) => s?.id === readId);
     if (!readStage) {
-      const searched = searchedFallback ? `${configPath} or ${DEFAULT_FLOW_CONFIG}` : configPath;
+      const searched = searchedFallback ? `${configPath} or ${fallbackConfigPath}` : configPath;
       return {
         ok: false,
         error: `stage "${readId}" listed in "reads" of "${stageId}" does not exist in ${searched}`,
@@ -333,7 +331,7 @@ export async function runVerify({
   diffFiles = null,
   porcelain = null,
   timeoutMs = 600000,
-  cwd = ROOT,
+  cwd = process.cwd(),
 } = {}) {
   const checks = [];
   const record = (name, ok, detail = "") =>
@@ -517,8 +515,8 @@ export async function runVerify({
 
 const USAGE = [
   "usage:",
-  "  yukl render <stage-id> [--config <path>] [--task-id <id>]",
-  "  yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>]",
+  "  yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]",
+  "  yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]",
 ].join("\n");
 
 function parseArgs(argv) {
@@ -528,6 +526,7 @@ function parseArgs(argv) {
     ["--task-id", "taskId"],
     ["--base", "base"],
     ["--timeout-ms", "timeoutMs"],
+    ["--cwd", "cwd"],
   ]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -553,6 +552,7 @@ async function main() {
     return;
   }
   const [command, ...positional] = options.positional;
+  const cwd = resolve(options.cwd ?? process.cwd());
 
   if (command === "render") {
     const [stageId, ...rest] = positional;
@@ -561,7 +561,7 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    const configPath = resolve(process.cwd(), options.config ?? "flow.config.json");
+    const configPath = resolve(cwd, options.config ?? "flow.config.json");
     const result = renderStage(configPath, stageId, options.taskId ?? null);
     if (!result.ok) {
       console.error(`yukl render: ${result.error}`);
@@ -586,7 +586,7 @@ async function main() {
       contractPaths: positional,
       base: options.base ?? null,
       timeoutMs,
-      cwd: ROOT,
+      cwd,
     });
     for (const check of result.checks) {
       const line = `${check.status} ${check.name}`;
