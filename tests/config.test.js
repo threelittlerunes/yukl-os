@@ -5,6 +5,7 @@ import {
   validateFlowConfig,
   validateIntent,
   validateGithubStandards,
+  validateOrcaYaml,
   validateShippedFiles,
 } from "../scripts/validate-config.js";
 
@@ -37,6 +38,11 @@ test(".yukl-intent.yml parses and contains no placeholder text (IC-10)", () => {
   assert.ok(doc.rational_persuasion.empirical_proof.length > 0);
 
   const { errors } = validateIntent();
+  assert.deepEqual(errors, []);
+});
+
+test("orca.yaml is structurally cross-checked against flow.config.json and the contract schema", () => {
+  const { errors } = validateOrcaYaml();
   assert.deepEqual(errors, []);
 });
 

@@ -206,16 +206,64 @@ export function validateRules() {
 export function validateOrcaYaml() {
   const errors = [];
   const doc = readYaml("orca.yaml");
+
+  if (!doc || typeof doc !== "object") {
+    return { errors: ["orca.yaml: root must be a mapping"] };
+  }
+
   const listed = new Set();
-  for (const agent of Object.values(doc?.agents ?? {})) {
-    if (Array.isArray(agent?.rules)) {
-      for (const rule of agent.rules) if (typeof rule === "string") listed.add(rule);
+  const agents = doc.agents;
+  if (agents === undefined || agents === null || typeof agents !== "object") {
+    errors.push("orca.yaml: agents block must be a mapping");
+  } else {
+    for (const [name, agent] of Object.entries(agents)) {
+      if (!agent || typeof agent !== "object") {
+        errors.push(`orca.yaml: agents.${name} must be a mapping`);
+        continue;
+      }
+      if (Array.isArray(agent.rules)) {
+        for (const rule of agent.rules) if (typeof rule === "string") listed.add(rule);
+      }
+      if (!isString(agent.agent))
+        errors.push(`orca.yaml: agents.${name}.agent must be a non-empty string`);
+      else if (!ALLOWED_AGENTS.includes(agent.agent))
+        errors.push(
+          `orca.yaml: agents.${name}.agent "${agent.agent}" is not in ${ALLOWED_AGENTS.join(", ")}`,
+        );
     }
   }
+
   for (const file of listRuleFiles()) {
     if (!listed.has(file))
       errors.push(`orca.yaml: ${file} is not listed in any agents.*.rules array (V-2)`);
   }
+
+  const pipeline = doc.pipeline;
+  if (!pipeline || typeof pipeline !== "object") {
+    errors.push("orca.yaml: pipeline block must be a mapping");
+  } else {
+    const flow = readJson("flow.config.json");
+    if (pipeline.config !== "flow.config.json")
+      errors.push('orca.yaml: pipeline.config must be "flow.config.json"');
+    if (pipeline.artifactsDir !== flow.artifactsDir)
+      errors.push(
+        `orca.yaml: pipeline.artifactsDir must match flow.config.json artifactsDir ("${flow.artifactsDir}")`,
+      );
+  }
+
+  if (!doc.contracts || doc.contracts.schema !== CONTRACT_SCHEMA)
+    errors.push(`orca.yaml: contracts.schema must match "${CONTRACT_SCHEMA}" (AF-7)`);
+
+  const env = doc.environment;
+  if (!env || typeof env !== "object") {
+    errors.push("orca.yaml: environment block must be a mapping");
+  } else {
+    if (!isString(env.worktree?.root))
+      errors.push("orca.yaml: environment.worktree.root must be a non-empty string");
+    if (!isString(env.locks?.dir))
+      errors.push("orca.yaml: environment.locks.dir must be a non-empty string");
+  }
+
   return { errors };
 }
 
