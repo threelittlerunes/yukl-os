@@ -7,7 +7,7 @@ enforce: small scope, empirical proof, no vibes.
 ## Getting set up
 
 ```sh
-git clone <your-fork-url>
+git clone https://github.com/YOUR-USERNAME/yukl-os
 cd yukl-os
 npm install
 npm run build   # static validation of the harness configuration

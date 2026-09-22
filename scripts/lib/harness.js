@@ -15,7 +15,6 @@ export const ROOT = join(HERE, "..", "..");
 export const RULES_DIR = join(ROOT, ".claude", "rules");
 export const CONTRACTS_DIR = ".orchestration/contracts";
 export const CONTRACT_SCHEMA = `${CONTRACTS_DIR}/<task_id>.json`;
-export const CONTRACT_REF_RE = /\.orchestration\/contracts\/[^\s")'`]+/g;
 
 /** Read a UTF-8 text file relative to the repository root. */
 export function readText(relPath) {

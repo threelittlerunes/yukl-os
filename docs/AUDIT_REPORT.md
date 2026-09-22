@@ -1,5 +1,7 @@
 # Architectural Audit Report: Yukl-OS Power Harness
 
+> **Superseded.** This was the initial architectural audit. All P0-P3 findings were remediated in task_78cbf848c6c4. See REAUDIT_VERDICT.md and subsequent contracts for current state.
+
 **Auditor:** Independent Architectural Review (Dispatched Worker)
 **Date:** 2026-09-22
 **Verdict:** FAIL - Significant structural, theoretical, and standards gaps

@@ -36,12 +36,14 @@ agents:
     rules:
       - ".claude/rules/drafter-api.md"
       - ".claude/rules/drafter-ui.md"
+      - ".claude/rules/plan-drafter.md"
   auditor:
     agent: "claude"
     power: "coercive-and-expert"
     write: false
     rules:
       - ".claude/rules/auditor.md"
+      - ".claude/rules/independent-auditor.md"
 
 tasks:
   defaults:

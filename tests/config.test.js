@@ -5,6 +5,7 @@ import {
   validateFlowConfig,
   validateIntent,
   validateGithubStandards,
+  validateShippedFiles,
 } from "../scripts/validate-config.js";
 
 test("flow.config.json parses and satisfies the pipeline schema", () => {
@@ -41,5 +42,10 @@ test(".yukl-intent.yml parses and contains no placeholder text (IC-10)", () => {
 
 test("GitHub community-health files are present", () => {
   const { errors } = validateGithubStandards();
+  assert.deepEqual(errors, []);
+});
+
+test("shipped files contain no template placeholders (V-4)", () => {
+  const { errors } = validateShippedFiles();
   assert.deepEqual(errors, []);
 });
