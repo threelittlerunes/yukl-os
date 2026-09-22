@@ -1,0 +1,52 @@
+# orca.yaml — Situational Control (environmental and structural design)
+#
+# The harness governs agents by constructing their environment rather than by
+# pleading with a prompt. Every agent runs inside an isolated Git worktree, and
+# any mutation of a shared resource is serialised through an advisory lock.
+version: "1.0"
+
+environment:
+  sandbox: "local-worktree"
+  vcs: "git"
+  worktree:
+    strategy: "per-task"
+    root: ".orchestration/worktrees"
+    cleanup: "on-success"
+  locks:
+    dir: ".orchestration/locks"
+
+pipeline:
+  config: "flow.config.json"
+  artifactsDir: ".orchestration/artifacts"
+  maxRetries: 3
+  autoRun: true
+
+contracts:
+  schema: ".orchestration/contracts/<task_id>.json"
+
+agents:
+  orchestrator:
+    agent: "claude"
+    power: "legitimate"
+    write: false
+  drafter:
+    agent: "opencode"
+    power: "expert"
+    write: true
+    rules:
+      - ".claude/rules/drafter-api.md"
+      - ".claude/rules/drafter-ui.md"
+      - ".claude/rules/plan-drafter.md"
+  auditor:
+    agent: "claude"
+    power: "coercive-and-expert"
+    write: false
+    rules:
+      - ".claude/rules/auditor.md"
+      - ".claude/rules/independent-auditor.md"
+
+tasks:
+  defaults:
+    timeoutMs: 900000
+    readinessMinBytes: 200
+    requireContract: true
