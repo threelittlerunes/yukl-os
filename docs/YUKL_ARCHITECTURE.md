@@ -119,3 +119,21 @@ Addressed in this release: factor 10 (test like software) via `npm test`; factor
 - **Reward power** has no mechanism. There is no positive-reinforcement signal (priority boost, larger token budget) for good work. Planned: a stage-level score that raises the Drafter's retry budget after clean audits.
 - **Coalition tactics** have no mechanism. There is no multi-agent vote. Planned only if a second reviewer role is introduced.
 - **Log retention** is documented but not yet enforced by a scheduled purge.
+
+### 3.3 Dual-pipeline review mode
+
+`review.config.json` encodes an optional A/B review pattern for changes that
+warrant more scrutiny than the single auditor in `flow.config.json`. Two
+independent analysis passes run the **same prompt template** against the same
+implementation, each writing to a separate output path
+(`.orchestration/artifacts/review-a.md` and `review-b.md`). A consensus stage
+(`claude`) then reads both outputs and extracts the findings.
+
+Independent passes reduce false positives: neither pass sees the other's
+report, so a hallucinated finding in one cannot seed the same hallucination in
+the other. Findings reported by **both** passes are treated as confirmed;
+findings reported by only one are flagged for human triage rather than being
+silently dropped.
+
+This is an optional, documented capability. The default pipeline remains the
+single auditor in `flow.config.json`.
