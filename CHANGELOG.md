@@ -10,6 +10,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Scheduled artifact purge implementing the retention policy in
   `.orchestration/artifacts/README.md`.
 - GitHub Action implementing the Phase 5 feedback loop (see `docs/SDLC_PLAN.md`).
+- Skill/plugin entry point for Orca runtime integration.
+- Phase 3 autonomous loop scheduling.
+
+## [2.1.0] - 2026-09-22
+
+Post-audit hardening: dual-pipeline review, structural cross-validation, and
+deterministic-first governance principles.
+
+### Added
+- Dual-pipeline A/B review mode (`review.config.json`) with independent passes
+  and consensus extraction gate (`b7e6d32`).
+- Full structural cross-validation of `orca.yaml` against `flow.config.json`
+  and the contract schema (`16609de`).
+- Independent QA verdict prompt (`VERDICT_PROMPT.md`) (`19e5f18`).
+- Deterministic-first validation principle in `CONTRIBUTING.md` (`67c1a0b`).
+- Consensus-gating rule for P0/P1 findings in review docs (`6585c7f`).
+
+### Changed
+- Consistency test name narrowed to match its actual scan scope (`fc00b7d`).
+- Biome config updated to ignore contract JSON; instruction count corrected in
+  reaudit verdict (`7a368d0`).
+
+### Fixed
+- Full union remediation of A/B review findings V-1 through V-5 and C-1
+  through C-13 (`13eaa52`, `48bea19`).
 
 ## [2.0.0] - 2026-09-22
 
