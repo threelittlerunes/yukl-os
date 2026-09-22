@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ROOT,
   checkScope,
   checkScopeWithoutContracts,
   contractViolations,
@@ -16,6 +15,7 @@ import {
   vcsViolation,
 } from "../scripts/yukl.js";
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 async function withTempDir(fn) {
@@ -75,6 +75,10 @@ test("render fails naming both configs when a reads id exists in neither", async
           { id: "stage-a", writes: "out.md", reads: ["no-such-stage"], spec: "reads {reads}" },
         ],
       }),
+    );
+    writeFileSync(
+      join(dir, "flow.config.json"),
+      JSON.stringify({ pipeline: [{ id: "stage-b", writes: "b.md", spec: "" }] }),
     );
     const result = renderStage(configPath, "stage-a");
     assert.equal(result.ok, false);
@@ -155,6 +159,10 @@ test("render CLI exits 2 when a reads id exists in neither config", async () => 
           { id: "stage-a", writes: "out.md", reads: ["no-such-stage"], spec: "reads {reads}" },
         ],
       }),
+    );
+    writeFileSync(
+      join(dir, "flow.config.json"),
+      JSON.stringify({ pipeline: [{ id: "stage-b", writes: "b.md", spec: "" }] }),
     );
     const result = spawnSync(
       process.execPath,
@@ -254,7 +262,7 @@ test("verify treats a non-zero expected_exit_code as a schema failure and does n
     assert.equal(result.ok, false);
     const schemaCheck = result.checks.find((c) => c.name.includes("schema"));
     assert.equal(schemaCheck.status, "FAIL");
-    assert.match(schemaCheck.detail, /expected_exit_code must be 0 \(CLAUDE\.md section 3\)/);
+    assert.match(schemaCheck.detail, /expected_exit_code must be 0/);
     assert.ok(
       !result.checks.some((c) => c.name.startsWith("command ")),
       "a schema-invalid command must never be executed",

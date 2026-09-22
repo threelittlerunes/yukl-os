@@ -37,8 +37,8 @@
   },
   "scripts": {
     "build": "node scripts/validate-config.js",
-    "test": "node scripts/count-instructions.js && node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js",
-    "test:config": "node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js",
+    "test": "node scripts/count-instructions.js && node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js tests/core-split.test.js",
+    "test:config": "node --test tests/config.test.js tests/rules.test.js tests/agents.test.js tests/yukl.test.js tests/core-split.test.js",
     "test:budget": "node scripts/count-instructions.js",
     "verify": "node scripts/yukl.js verify",
     "format": "biome format --write .",
