@@ -1,12 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readText, readYaml, splitFrontmatter, listRuleFiles } from "../scripts/lib/harness.js";
-import { measure, countInstructions } from "../scripts/count-instructions.js";
-import {
-  validateRules,
-  validateConsistency,
-  validateOrcaYaml,
-} from "../scripts/validate-config.js";
+import { measure, countInstructions } from "../scripts/repo-checks.js";
+import { validateRules, validateConsistency, validateOrcaYaml } from "../scripts/repo-checks.js";
 
 test("countInstructions ignores headings, blanks and fenced code", () => {
   const sample = [
