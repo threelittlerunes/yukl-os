@@ -24,6 +24,7 @@ Forbidden: this repo's own `CLAUDE.md`, `AGENTS.md`, `.github/workflows/**`, `yu
 5. `.orchestration/contracts/.gitkeep` is created.
 6. Idempotency: running init twice on a fixture gives no diff after the second run.
 7. Fixture tests cover a Node-only repo, a Python-only repo, a mixed repo, a repo with existing CLAUDE.md content, and each refusal case.
+8. The CLI entry point works through the npm bin shim. `scripts/yukl.js` only runs `main()` when `process.argv[1]` ends in `yukl.js`, but npm runs it as `node_modules/.bin/yukl` (a symlink on Linux and a `.cmd` wrapper on Windows), so the CLI probably does nothing there. This was found in the task f audit and is untested. A test runs `yukl` through an installed `.bin` shim (from `npm pack` plus an install into a temp folder) and checks that `verify` produces output.
 
 ## Open questions
 
