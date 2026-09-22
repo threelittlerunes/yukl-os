@@ -24,6 +24,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   matched by a small in-house glob (literal paths, `*` for one segment, `**`
   for any depth); a contract's `files_touched` must be a subset of the diff
   (task G).
+- `yukl verify --base` refuses a contract that already exists at the base
+  ref with "contract `<task_id>` is already merged at `<base>`; an intent
+  authorises one PR, so use a new task_id", so a PR cannot rewrite a merged
+  contract to inherit that task's merged intent (task G).
 
 ### Changed
 - `yukl verify --base` now reads both the command allowlist and the task

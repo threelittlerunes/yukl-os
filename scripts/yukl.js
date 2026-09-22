@@ -560,6 +560,12 @@ function gitDiffFiles(base, cwd) {
   return { ok: true, files: result.stdout.split(/\r?\n/).filter(Boolean) };
 }
 
+/** True when a repo-relative file already exists at the given ref. */
+export function fileExistsAtBase(base, relPath, cwd) {
+  const result = git(["cat-file", "-e", `${base}:${relPath.replace(/\\/g, "/")}`], cwd);
+  return result.status === 0;
+}
+
 /**
  * Refuse a Jujutsu-only repository. A repo root with `.jj` but no `.git`
  * (file or directory) has no Git metadata, so `git diff` and `git show`
@@ -588,7 +594,10 @@ export function vcsViolation(cwd) {
  * via git show, or from the working tree without `--base`; in "config" mode
  * every verified contract must additionally have a per-task intent at
  * .orchestration/intents/<task_id>.yml (read from the same source), and each
- * file it covers must satisfy that intent's allowed/forbidden paths. The diff
+ * file it covers must satisfy that intent's allowed/forbidden paths. In
+ * "config" mode with `--base`, a contract that already exists at the base ref
+ * is refused (one intent authorises one PR), so a PR cannot rewrite a merged
+ * contract to inherit its merged intent. The diff
  * is computed from `git diff base...HEAD` and the working tree is inspected
  * via `git status --porcelain`. `timeoutMs` bounds each proof command
  * (default 600000 ms).
@@ -695,6 +704,16 @@ export async function runVerify({
       data = JSON.parse(readFileSync(absPath, "utf8"));
     } catch (err) {
       record(`contract ${stem} schema`, false, `cannot parse JSON: ${err.message}`);
+      continue;
+    }
+
+    if (base != null && gateMode === "config" && fileExistsAtBase(base, contractPath, cwd)) {
+      const taskId = data?.task_id ?? stem.replace(/\.json$/i, "");
+      record(
+        `contract ${stem} replay`,
+        false,
+        `contract ${taskId} is already merged at ${base}; an intent authorises one PR, so use a new task_id`,
+      );
       continue;
     }
 

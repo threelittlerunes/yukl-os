@@ -175,7 +175,11 @@ reads both files from the base ref via `git show`, never from the working
 tree or HEAD: a PR can neither widen its own allowlist nor its own path scope.
 An intent that exists only in the PR fails with "intent for `<task_id>` not
 found at `<base>`; merge the intent first", so a task's intent must be merged
-before its implementation PR.
+before its implementation PR. Symmetrically, **one intent authorises one PR**:
+a contract that already exists at the base ref fails with "contract
+`<task_id>` is already merged at `<base>`; an intent authorises one PR, so use
+a new task_id". Without that rule a PR could rewrite a merged contract and
+inherit that task's merged, possibly broad, intent to cover new files.
 
 For every verified contract, each file in its `files_touched` must match one
 of the intent's `allowed_paths` and none of its `forbidden_paths` (forbidden
