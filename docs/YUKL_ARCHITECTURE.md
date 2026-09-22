@@ -157,3 +157,49 @@ and the consensus step is done by agents or people. The deterministic merge
 gate is the `verify-contract` CI job (`yukl verify`) plus the `validate` job,
 both required status checks on `main`. Consensus review is supplementary
 judgement on top of that gate, never a replacement for it.
+
+### 3.5 The split gate: repo-wide config and per-task intents
+
+`yukl verify` enforces two kinds of rules, now read from two different places
+instead of one root file:
+
+- **`yukl.config.json`** holds repo-wide settings: the `commands` shortcuts
+  (`build`, `test`, `format`), the `folders` layout, and the `allowlist` of
+  proof commands the gate may execute.
+- **`.orchestration/intents/<task_id>.yml`** holds one task's intent: its
+  goal, `allowed_paths`, `forbidden_paths`, assumptions, and consultation
+  flag. One file per task isolates merge conflicts.
+
+The **trust model is locked to the base ref.** With `--base`, `yukl verify`
+reads both files from the base ref via `git show`, never from the working
+tree or HEAD: a PR can neither widen its own allowlist nor its own path scope.
+An intent that exists only in the PR fails with "intent for `<task_id>` not
+found at `<base>`; merge the intent first", so a task's intent must be merged
+before its implementation PR.
+
+For every verified contract, each file in its `files_touched` must match one
+of the intent's `allowed_paths` and none of its `forbidden_paths` (forbidden
+wins); violations are listed by file. The matcher is a small in-house glob
+supporting literal paths, `*` (one path segment) and `**` (any depth):
+`tests/*.js` does not match `tests/x/y.js`, while `tests/**` does. Contract
+files themselves are exempt because their path is derived from the verified
+`task_id`. A contract's `files_touched` must also be a subset of the files
+changed in the diff, and every diff file must be covered by a contract.
+
+Without `--base`, `yukl verify` runs the same checks against the working
+tree. That local mode is a developer preview, not a trust boundary: it trusts
+the working-tree copies of the config and intents, and it checks every
+contract in the repository, so repositories carrying pre-split legacy
+contracts (tasks a-f here) fail local verification until their intents are
+written. The merge gate is unaffected: `verify --base` only ever checks
+contracts present in the diff.
+
+The root `.yukl-intent.yml` is kept as a **legacy fallback for one release**,
+used only when `yukl.config.json` is absent, so repositories that predate the
+split keep verifying. It will be removed once adopters have migrated. The PR
+that introduced this section was itself verified by the old gate, because its
+base carried only `.yukl-intent.yml`; path enforcement applies from the next
+PR onwards.
+
+`npm run build` validates the `yukl.config.json` schema and every intent file
+in `.orchestration/intents/`, alongside the repo-only governance checks.
