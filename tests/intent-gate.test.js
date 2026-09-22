@@ -265,6 +265,35 @@ test("verify --base fails when the intent exists only in the PR", async () => {
   });
 });
 
+test("verify --base fails when a PR rewrites an already-merged contract (merged-intent replay)", async () => {
+  await withTempRepo(async (dir) => {
+    writeConfig(dir);
+    writeIntent(dir, ["src/**"]);
+    writeTreeFile(dir, "src/old.js");
+    writeContract(dir, 'node -e "process.exit(0)"', ["src/old.js"]);
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "base"], dir);
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    // Rewrite the merged contract to cover a brand-new file: the task's
+    // merged intent (src/**) would otherwise authorise it.
+    writeTreeFile(dir, "src/new.js");
+    writeContract(dir, 'node -e "process.exit(0)"', [
+      ".orchestration/contracts/demo.json",
+      "src/new.js",
+    ]);
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "replay merged contract"], dir);
+
+    const result = verifyBase(dir);
+    assert.equal(result.status, 1, `expected exit 1; stdout:\n${result.stdout}`);
+    assert.match(
+      result.stdout,
+      /contract demo is already merged at main; an intent authorises one PR, so use a new task_id/,
+    );
+  });
+});
+
 test("verify --base reads the allowlist from the base, not the PR branch", async () => {
   await withTempRepo(async (dir) => {
     writeConfig(dir);
