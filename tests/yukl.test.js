@@ -13,6 +13,7 @@ import {
   dirtyTreeWarning,
   renderStage,
   runVerify,
+  vcsViolation,
 } from "../scripts/yukl.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -310,6 +311,52 @@ test("verify fails with a timeout when a proof command hangs", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// verify: colocated Jujutsu (task E)
+// ---------------------------------------------------------------------------
+
+test("vcsViolation allows a .git directory", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, ".git"));
+    assert.equal(vcsViolation(dir), null);
+  });
+});
+
+test("vcsViolation allows a .git file (git worktree)", async () => {
+  await withTempDir(async (dir) => {
+    writeFileSync(join(dir, ".git"), "gitdir: /tmp/elsewhere/.git/worktrees/agent\n");
+    assert.equal(vcsViolation(dir), null);
+  });
+});
+
+test("vcsViolation allows colocated Jujutsu (.jj plus .git)", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, ".jj"));
+    mkdirSync(join(dir, ".git"));
+    assert.equal(vcsViolation(dir), null);
+  });
+});
+
+test("vcsViolation refuses a Jujutsu-only repo and names colocated mode", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, ".jj"));
+    const message = vcsViolation(dir);
+    assert.match(message, /jj git colocation enable/);
+  });
+});
+
+test("verify refuses a Jujutsu-only repo before any other check", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, ".jj"));
+    const result = await runVerify({ contractPaths: [], allowlist: [], cwd: dir });
+    assert.equal(result.ok, false);
+    const vcsCheck = result.checks.find((c) => c.name.includes("colocated Jujutsu"));
+    assert.equal(vcsCheck.status, "FAIL");
+    assert.match(vcsCheck.detail, /jj git colocation enable/);
+    assert.equal(result.checks.length, 1, "the VCS gate must be the only check");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // verify: working-tree warning (B3 defect 3)
 // ---------------------------------------------------------------------------
 
@@ -323,6 +370,12 @@ test("dirtyTreeWarning returns none for an empty porcelain string", () => {
 
 test("dirtyTreeWarning ignores paths under node_modules/", () => {
   assert.equal(dirtyTreeWarning("?? node_modules/foo.js"), null);
+});
+
+test("dirtyTreeWarning names jj new for a colocated Jujutsu workspace", () => {
+  const warning = dirtyTreeWarning("M scripts/yukl.js", true);
+  assert.match(warning, /uncommitted or untracked changes/);
+  assert.match(warning, /`jj new`/);
 });
 
 test("verify --base records WARN, not FAIL, on a dirty working tree (injected porcelain)", async () => {

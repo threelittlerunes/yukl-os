@@ -191,18 +191,25 @@ export function checkScopeWithoutContracts(diffFiles) {
 /**
  * Inspect `git status --porcelain` output and return a warning when the
  * working tree carries uncommitted or untracked changes outside
- * node_modules/. Returns null when the tree is clean. Pure function.
+ * node_modules/. `jujutsu` marks a colocated Jujutsu workspace (`.jj`
+ * present): there, work in the working-copy commit is invisible to
+ * `git diff base...HEAD` until HEAD advances, so the warning names `jj new`.
+ * Returns null when the tree is clean. Pure function.
  */
-export function dirtyTreeWarning(porcelain) {
+export function dirtyTreeWarning(porcelain, jujutsu = false) {
   const dirty = porcelain
     .split(/\r?\n/)
     .filter(Boolean)
     .some((line) => !line.slice(3).startsWith("node_modules/"));
   if (!dirty) return null;
-  return (
+  const base =
     "WARNING: working tree has uncommitted or untracked changes; " +
     "verify --base checks committed state only (base...HEAD). " +
-    "Commit first for an accurate preview."
+    "Commit first for an accurate preview.";
+  if (!jujutsu) return base;
+  return (
+    `${base} Colocated Jujutsu: work in the working-copy commit is not on HEAD, ` +
+    "so it is invisible to git diff; run `jj new` so the change becomes HEAD."
   );
 }
 
@@ -291,6 +298,26 @@ function gitDiffFiles(base, cwd) {
 }
 
 /**
+ * Refuse a Jujutsu-only repository. A repo root with `.jj` but no `.git`
+ * (file or directory) has no Git metadata, so `git diff` and `git show`
+ * cannot run. Colocated mode (`jj git colocation enable`) keeps a `.git` next
+ * to `.jj` and is fine; a secondary `jj workspace add` has no `.git` and is
+ * refused. Returns null when the layout is acceptable. Pure function.
+ */
+export function vcsViolation(cwd) {
+  const hasJujutsu = existsSync(join(cwd, ".jj"));
+  const hasGit = existsSync(join(cwd, ".git"));
+  if (hasJujutsu && !hasGit) {
+    return (
+      "Jujutsu-only repository: .jj exists but .git does not (as file or directory). " +
+      "yukl verify requires Git metadata; run jj git colocation enable to convert the " +
+      "workspace into a colocated Jujutsu/Git workspace."
+    );
+  }
+  return null;
+}
+
+/**
  * Run the Rational Persuasion gate.
  * `allowlist`, `diffFiles` and `porcelain` are injectable for tests; when null
  * the allowlist is read from .yukl-intent.yml (from the working tree, or from
@@ -312,12 +339,19 @@ export async function runVerify({
   const record = (name, ok, detail = "") =>
     checks.push({ name, status: ok ? "PASS" : "FAIL", detail });
 
+  const vcsError = vcsViolation(cwd);
+  if (vcsError) {
+    record("repo has Git metadata (colocated Jujutsu supported)", false, vcsError);
+    return { ok: false, checks };
+  }
+  record("repo has Git metadata (colocated Jujutsu supported)", true);
+
   if (base != null) {
     if (porcelain == null) {
       const status = git(["status", "--porcelain"], cwd);
       porcelain = status.status === 0 ? status.stdout : "";
     }
-    const warning = dirtyTreeWarning(porcelain);
+    const warning = dirtyTreeWarning(porcelain, existsSync(join(cwd, ".jj")));
     if (warning) {
       console.error(warning);
       checks.push({ name: "working tree clean", status: "WARN", detail: warning });

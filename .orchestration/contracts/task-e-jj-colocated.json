@@ -1,0 +1,17 @@
+{
+  "task_id": "task-e-jj-colocated",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".orchestration/contracts/task-e-jj-colocated.json",
+    "CHANGELOG.md",
+    "docs/SDLC_PLAN.md",
+    "scripts/validate-config.js",
+    "scripts/yukl.js",
+    "tests/rules.test.js",
+    "tests/yukl.test.js"
+  ]
+}

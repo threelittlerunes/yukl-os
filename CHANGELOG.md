@@ -25,6 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `js-yaml` moved to `dependencies`: the verify runtime parses
   `.yukl-intent.yml` (task B).
 - `package.json` marked private at version 2.1.0 (task A).
+- Dropped the AF-6 "no Jujutsu" invariant: Jujutsu is supported when colocated
+  with Git, and `yukl verify` refuses a Jujutsu-only repo (`.jj` without
+  `.git`, file or directory) with a message naming `jj git colocation enable`,
+  while the dirty-tree warning reminds colocated users to run `jj new` so the
+  change becomes HEAD (task E).
 
 ### Fixed
 - `yukl render` resolves `reads` ids against `flow.config.json` when the given

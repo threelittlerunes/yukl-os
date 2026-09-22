@@ -3,8 +3,8 @@
 //
 // Validates the machine-readable harness configuration (flow.config.json,
 // .yukl-intent.yml), the path-scoped rule frontmatter, the contract-filename
-// standard (AF-7), the single-VCS invariant (AF-6), and the presence of the
-// GitHub community-health files. Exits non-zero on any failure.
+// standard (AF-7), and the presence of the GitHub community-health files.
+// Exits non-zero on any failure.
 
 import {
   listRuleFiles,
@@ -284,11 +284,6 @@ export function validateConsistency() {
   for (const file of SCAN_FILES) {
     const text = readText(file);
 
-    if (/\bjj\b/i.test(text) || /Jujutsu/i.test(text)) {
-      errors.push(
-        `${file}: references Jujutsu/jj; the harness standardises on Git worktrees (AF-6)`,
-      );
-    }
     if (/\bCONTRACT\.json\b/.test(text)) {
       errors.push(`${file}: references CONTRACT.json; use ${CONTRACT_SCHEMA} (AF-7)`);
     }
