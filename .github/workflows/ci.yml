@@ -26,9 +26,6 @@ jobs:
       - name: Validate harness configuration (build)
         run: npm run build
 
-      - name: Instruction budget
-        run: node scripts/count-instructions.js
-
       - name: Test
         run: npm test
 

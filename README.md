@@ -1,7 +1,7 @@
 # Yukl-OS: The Power-Based Agent Harness
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-pending-lightgrey.svg)](.github/workflows/ci.yml)
+[![Build Status](https://github.com/threelittlerunes/yukl-os/actions/workflows/ci.yml/badge.svg)](https://github.com/threelittlerunes/yukl-os/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/badge/npm-v2.0.0-blue.svg)](package.json)
 
 > **Govern your agents; do not plead with them.**
@@ -93,13 +93,13 @@ Yukl-OS draws on two distinct organisational-psychology frameworks: **French & R
 
 | Harness mechanism | Framework | Concept |
 |---|---|---|
-| Root `CLAUDE.md` router | Yukl taxonomy | Legitimate power |
-| Path-scoped rules (`.claude/rules/*.md`) | Yukl taxonomy | Informational power |
-| Drafter (specialist implementation) | Yukl taxonomy | Expert power |
-| Auditor (independent judgement) | Yukl taxonomy | Expert power |
-| Contract verification loop | Yukl taxonomy | Rational persuasion |
-| Mandatory human scope interview | Yukl taxonomy | Consultation |
-| `onFailGoto` retry and process kill | Yukl taxonomy | Coercive power |
+| Root `CLAUDE.md` router | French & Raven base | Legitimate power |
+| Path-scoped rules (`.claude/rules/*.md`) | French & Raven base | Informational power |
+| Drafter (specialist implementation) | French & Raven base | Expert power |
+| Auditor (independent judgement) | French & Raven base | Expert power |
+| Contract verification loop | Yukl tactic | Rational persuasion |
+| Mandatory human scope interview | Yukl tactic | Consultation |
+| `onFailGoto` retry and process kill | French & Raven base | Coercive power |
 | Isolated Git worktree and lock broker | Structural design | Environment shapes behaviour |
 
 Power bases originate from French & Raven (1959); Yukl's taxonomy (1990) integrates them with eleven influence tactics into a unified model.

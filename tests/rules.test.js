@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readText, splitFrontmatter, listRuleFiles } from "../scripts/lib/harness.js";
+import { readText, readYaml, splitFrontmatter, listRuleFiles } from "../scripts/lib/harness.js";
 import { measure, countInstructions } from "../scripts/count-instructions.js";
-import { validateRules, validateConsistency } from "../scripts/validate-config.js";
+import {
+  validateRules,
+  validateConsistency,
+  validateOrcaYaml,
+} from "../scripts/validate-config.js";
 
 test("countInstructions ignores headings, blanks and fenced code", () => {
   const sample = [
@@ -48,4 +52,23 @@ test("drafter-ui.md frontmatter scopes src/ui/** (IC-1)", () => {
 test("auditor.md is forbidden from a src/** write scope (AF-10)", () => {
   const { frontmatter } = splitFrontmatter(readText(".claude/rules/auditor.md"));
   assert.deepEqual(frontmatter.paths, [".orchestration/contracts/*.json"]);
+});
+
+test("CLAUDE.md section 2 routes every rule file (V-1)", () => {
+  const text = readText("CLAUDE.md");
+  for (const file of listRuleFiles()) {
+    assert.ok(text.includes(file), `CLAUDE.md does not route ${file}`);
+  }
+});
+
+test("orca.yaml lists every rule file under an agent (V-2)", () => {
+  const listed = new Set();
+  for (const agent of Object.values(readYaml("orca.yaml").agents ?? {})) {
+    for (const rule of agent.rules ?? []) listed.add(rule);
+  }
+  for (const file of listRuleFiles()) {
+    assert.ok(listed.has(file), `orca.yaml does not list ${file}`);
+  }
+  const { errors } = validateOrcaYaml();
+  assert.deepEqual(errors, []);
 });

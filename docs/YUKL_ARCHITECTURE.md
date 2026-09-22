@@ -61,7 +61,7 @@ Two deliberate non-mappings are worth recording. **Referent power** - influence 
 
 ### 2.4 Legitimate Power (The 60-Line Root Imperative)
 *Authority through hierarchical position.*
-The root `CLAUDE.md` is the system's constitution. It is restricted to **fewer than 60 lines** and is checked by `scripts/count-instructions.js`. It must pass the *Discoverability Test*: if an agent can infer a rule by reading the code, the rule is excluded. The root file states the agent's Legitimate Power, acting purely as a router that points agents to their specialized scopes.
+The root `CLAUDE.md` is the system's constitution. It is restricted to **no more than 60 lines** and is checked by `scripts/count-instructions.js`. It must pass the *Discoverability Test*: if an agent can infer a rule by reading the code, the rule is excluded. The root file states the agent's Legitimate Power, acting purely as a router that points agents to their specialized scopes.
 
 ### 2.5 Information Power (Progressive Disclosure)
 *Control over critical data flow.*

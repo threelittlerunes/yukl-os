@@ -1,5 +1,7 @@
 # Publication Audit Report
 
+> **Superseded.** This audit was conducted before the A/B review of 2026-09-22. See the contracts in `.orchestration/contracts/` for current findings.
+
 ## 1. README.md Review
 - **Structure**: The structure serves both casual scanners and technical engineers well, providing a concise "Quick Start" alongside deeper "How It Works" and "Architecture" sections.
 - **Power taxonomy table**: Accurate and maps correctly against the definitions found in `docs/YUKL_ARCHITECTURE.md`.

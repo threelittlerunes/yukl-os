@@ -13,7 +13,7 @@ import { listRuleFiles, readText, splitFrontmatter } from "./lib/harness.js";
 /**
  * Per-file budgets. `maxInstructions` caps the directive count; `maxLines`
  * (optional) caps raw line count - the root constitution is capped at 60 lines
- * by YUKL_ARCHITECTURE.md section 2.1.
+ * by YUKL_ARCHITECTURE.md section 2.4.
  */
 export const BUDGETS = {
   "CLAUDE.md": { maxLines: 60, maxInstructions: 40 },

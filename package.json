@@ -5,6 +5,28 @@
   "license": "MIT",
   "type": "module",
   "private": false,
+  "author": "threelittlerunes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/threelittlerunes/yukl-os.git"
+  },
+  "homepage": "https://github.com/threelittlerunes/yukl-os#readme",
+  "bugs": {
+    "url": "https://github.com/threelittlerunes/yukl-os/issues"
+  },
+  "files": [
+    "flow.config.json",
+    "orca.yaml",
+    ".yukl-intent.yml",
+    "INTENT.md",
+    "scripts/",
+    ".claude/",
+    ".orchestration/artifacts/",
+    ".orchestration/contracts/.gitkeep",
+    ".orchestration/locks/.gitkeep",
+    "docs/",
+    "biome.json"
+  ],
   "engines": {
     "node": ">=20"
   },

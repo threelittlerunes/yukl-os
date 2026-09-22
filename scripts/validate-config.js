@@ -26,6 +26,7 @@ export const REQUIRED_FILES = [
   "SECURITY.md",
   "CHANGELOG.md",
   ".gitignore",
+  ".gitattributes",
   "flow.config.json",
   "orca.yaml",
   ".yukl-intent.yml",
@@ -54,7 +55,10 @@ export const SCAN_FILES = [
 
 const ALLOWED_AGENTS = ["claude", "opencode", "codex", "gemini", "antigravity"];
 const PLACEHOLDER_RE =
-  /Briefly describe|Replace this|\[Replace|Assumption 1\.\.\.|Assumption 2\.\.\.|feature-name/i;
+  /Briefly describe|Replace this|\[Replace|\[e\.g\.|Assumption 1\.\.\.|Assumption 2\.\.\.|feature-name/i;
+const ANGLE_PLACEHOLDER_RE = /<your-[a-z-]+>/i;
+
+export const SHIPPED_FILES = ["INTENT.md", "CONTRIBUTING.md"];
 
 function isString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -188,6 +192,42 @@ export function validateRules() {
   if (!uiPaths.includes("src/ui/**"))
     errors.push('.claude/rules/drafter-ui.md: frontmatter paths must include "src/ui/**" (IC-1)');
 
+  const routed = new Set(
+    readText("CLAUDE.md").match(/\.claude\/rules\/[A-Za-z0-9._-]+\.md/g) ?? [],
+  );
+  for (const file of listRuleFiles()) {
+    if (!routed.has(file))
+      errors.push(`CLAUDE.md: section 2 routing table does not reference ${file} (V-1)`);
+  }
+
+  return { errors };
+}
+
+export function validateOrcaYaml() {
+  const errors = [];
+  const doc = readYaml("orca.yaml");
+  const listed = new Set();
+  for (const agent of Object.values(doc?.agents ?? {})) {
+    if (Array.isArray(agent?.rules)) {
+      for (const rule of agent.rules) if (typeof rule === "string") listed.add(rule);
+    }
+  }
+  for (const file of listRuleFiles()) {
+    if (!listed.has(file))
+      errors.push(`orca.yaml: ${file} is not listed in any agents.*.rules array (V-2)`);
+  }
+  return { errors };
+}
+
+export function validateShippedFiles() {
+  const errors = [];
+  for (const file of SHIPPED_FILES) {
+    const text = readText(file);
+    if (PLACEHOLDER_RE.test(text))
+      errors.push(`${file}: still contains template placeholder text (V-4)`);
+    if (ANGLE_PLACEHOLDER_RE.test(text))
+      errors.push(`${file}: still contains an angle-bracket placeholder (V-4)`);
+  }
   return { errors };
 }
 
@@ -243,7 +283,9 @@ export function validateAll() {
     flowConfig: validateFlowConfig(),
     intent: validateIntent(),
     rules: validateRules(),
+    orca: validateOrcaYaml(),
     consistency: validateConsistency(),
+    shipped: validateShippedFiles(),
     github: validateGithubStandards(),
   };
   const errors = Object.entries(groups).flatMap(([name, r]) =>

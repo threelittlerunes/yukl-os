@@ -11,6 +11,8 @@ Do NOT guess conventions. Rely on path-scoped rules injected into your context:
 - If modifying `src/api/**` -> adhere to `.claude/rules/drafter-api.md`.
 - If modifying `src/ui/**` -> adhere to `.claude/rules/drafter-ui.md`.
 - If auditing an implementation -> adhere to `.claude/rules/auditor.md`.
+- If modifying `docs/SDLC_PLAN.md` -> adhere to `.claude/rules/plan-drafter.md`.
+- If auditing a plan -> adhere to `.claude/rules/independent-auditor.md`.
 
 ## 3. Rational Persuasion (The Contract)
 Before concluding a task, you MUST write your empirical proof to `.orchestration/contracts/<task_id>.json`.
