@@ -12,7 +12,7 @@ Output of the `legitimate-power-router` stage, from the scope interview on 2026-
 ## Decisions locked in the interview
 
 1. **Split:** the plan's A1 is split into a core-only change (f) and `yukl init` (h), with A2 (g) between them, so init writes the final config format.
-2. **Location:** intents are drafted here, where changes are docs-only and need no contract. Until task g lands, the orchestrator copies a task's `.yukl-intent.yml` block into the root `.yukl-intent.yml` on that task's branch, and its scope section into `.orchestration/artifacts/scope_contract.md` before dispatch.
+2. **Location:** intents are drafted here, where changes are docs-only and need no contract. Until task g lands, the intent file itself is the Drafter's scope contract, given in the dispatch spec. Copying the `.yukl-intent.yml` block or writing `.orchestration/artifacts/scope_contract.md` was dropped at task e: `verify` reads only the command allowlist, and reads it from the base branch, and neither file is in any task's allowed paths.
 3. **Trust model for task g:** `verify` reads a task's `allowed_paths` from the **base branch**, the same way it reads the command allowlist today. A task's intent must be merged before its implementation PR, so an agent cannot widen its own scope.
 
 ## Dispatch
