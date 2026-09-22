@@ -262,7 +262,7 @@ test("verify treats a non-zero expected_exit_code as a schema failure and does n
     assert.equal(result.ok, false);
     const schemaCheck = result.checks.find((c) => c.name.includes("schema"));
     assert.equal(schemaCheck.status, "FAIL");
-    assert.match(schemaCheck.detail, /expected_exit_code must be 0 \(CLAUDE\.md section 3\)/);
+    assert.match(schemaCheck.detail, /expected_exit_code must be 0/);
     assert.ok(
       !result.checks.some((c) => c.name.startsWith("command ")),
       "a schema-invalid command must never be executed",
