@@ -15,8 +15,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tracked in version control (tasks A, B and C).
 - Phase 5 scoping note in `docs/SDLC_PLAN.md` (task C).
 - `AGENTS.md` mirroring `CLAUDE.md` with a byte-identity sync test (task A).
+- Repo-wide gate config `yukl.config.json` (commands, folders, the
+  proof-command allowlist) and per-task intents at
+  `.orchestration/intents/<task_id>.yml` (goal, allowed and forbidden paths,
+  assumptions, consultation), validated by `npm run build` (task G).
+- `yukl verify` path enforcement: each file a contract covers must match the
+  task intent's `allowed_paths` and no `forbidden_paths` (forbidden wins),
+  matched by a small in-house glob (literal paths, `*` for one segment, `**`
+  for any depth); a contract's `files_touched` must be a subset of the diff
+  (task G).
+- `yukl verify --base` refuses a contract that already exists at the base
+  ref with "contract `<task_id>` is already merged at `<base>`; an intent
+  authorises one PR, so use a new task_id", so a PR cannot rewrite a merged
+  contract to inherit that task's merged intent (task G).
+- `.orchestration/intents/**` is doc-exempt, so a PR that only adds an intent
+  file passes `verify --base` without a contract and the intent-first
+  workflow ("merge the intent first") can go through the gate; a PR carrying
+  contracts must still cover a changed intent file in `files_touched`
+  (task G).
 
 ### Changed
+- `yukl verify --base` now reads both the command allowlist and the task
+  intent from the base ref via `git show`, never from the working tree or
+  HEAD, so a PR cannot widen its own allowlist or path scope; an intent that
+  exists only in the PR fails with "intent for `<task_id>` not found at
+  `<base>`; merge the intent first" (task G).
+- The root `.yukl-intent.yml` is kept as a legacy fallback for one release,
+  used only when `yukl.config.json` is absent; without `--base`, verify reads
+  the working tree and is a developer preview rather than a trust boundary,
+  and a contract whose intent file is absent gets a warning instead of a
+  failure, so repositories with pre-intent contracts keep `npm run verify`
+  green (task G).
 - `yukl render` and `yukl verify` now resolve the target repository from
   `process.cwd()` or an explicit `--cwd` flag instead of the package directory,
   so the core runs inside any repository; the `render` reads-fallback looks for

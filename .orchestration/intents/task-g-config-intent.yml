@@ -1,0 +1,41 @@
+intent:
+  # The overarching goal of the task (the "Why")
+  goal: "Separate repo-wide settings from per-task intent; verify enforces allowed paths."
+
+  # Information Power: what files may this task's contract cover? Every file
+  # in the contract's files_touched must match an allowed_paths pattern and no
+  # forbidden_paths pattern (forbidden wins).
+  scope:
+    allowed_paths:
+      - "scripts/**"
+      - "tests/**"
+      - "yukl.config.json"
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "package-lock.json"
+      - "CHANGELOG.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+    forbidden_paths:
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - ".claude/rules/**"
+      - ".github/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "docs/intents/**"
+      - "docs/AUDIT_REPORT.md"
+      - "docs/PUBLICATION_AUDIT.md"
+      - "docs/REAUDIT_VERDICT.md"
+      - "docs/SDLC_PLAN.md"
+
+rational_persuasion:
+  # Assumptions the Auditor is invited to challenge.
+  assumptions:
+    - "verify --base reads yukl.config.json and this intent from the base ref via git show; a PR can neither widen its allowlist nor its allowed_paths."
+    - "The legacy .yukl-intent.yml stays as a fallback for one release, used only when yukl.config.json is absent."
+
+consultation:
+  # Does this change touch the gate itself? Yes: it changes what verify
+  # enforces, so it triggers human review.
+  requires_human_approval: true
+  human_reviewer_tags: ["gate-change"]
