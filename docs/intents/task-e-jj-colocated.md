@@ -22,12 +22,12 @@ Forbidden: everything else, including `docs/AUDIT_REPORT.md` and the historical 
 1. The Jujutsu scan in `scripts/validate-config.js:287` and the matching test in `tests/rules.test.js:42` are removed. Their CONTRACT.json and Ecological Power checks stay.
 2. The PR template no longer requires "No Jujutsu/`jj` references".
 3. The line "There is one VCS in this repository: Git" in `docs/SDLC_PLAN.md` Phase 1 is rewritten to "Git is required; Jujutsu is supported when colocated".
-4. `yukl verify` checks the repo root before any other check. If `.jj/` is present and `.git` is absent, it exits 1 with a message naming colocated mode (`jj git init --colocate`).
+4. `yukl verify` checks the repo root before any other check. If `.jj/` is present and `.git` is absent, it exits 1 with a message naming `jj git colocation enable`. (`jj git init --colocate` fails on an existing repo with "The target repo already exists"; checked with jj 0.45.1 during the audit.)
 5. `.git` as a **file** (a Git worktree, which is how the harness runs agents) counts as Git present. Tests cover four cases: `.git` directory, `.git` file, `.jj` plus `.git`, and `.jj` only.
 
 ## Assumptions (for the Auditor to test)
 
-- `verify` keeps using `git diff` and `git show`. In colocated mode those give correct results once Jujutsu has exported its commits to Git.
+- `verify` keeps using `git diff` and `git show`. In colocated mode those give correct results once Jujutsu has exported its commits to Git. **Refuted in audit:** work in the working-copy commit (`@`) is not on Git's HEAD until `jj new`, so a local `verify --base` does not see it. The dirty-tree WARN now names `jj new`. CI is unaffected.
 - A secondary Jujutsu workspace (`jj workspace add`) has no `.git`, so it is refused. That is the intended behaviour.
 
 ## .yukl-intent.yml block
