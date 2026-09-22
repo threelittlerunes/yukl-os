@@ -55,9 +55,14 @@ it detects from `package.json` and `pyproject.toml` (undetected commands are
 `null`, never guessed), appends a marked section to any existing `CLAUDE.md`,
 `AGENTS.md` or `GEMINI.md`, and installs a CI workflow at
 `.github/workflows/yukl.yml` that gates PRs on `yukl verify --base` running a
-commit-pinned harness. Re-run it after a merge to update the generated files,
-passing `--force` to overwrite an existing config; everything else is left
-alone.
+commit-pinned harness. Subdirectory projects are handled with
+`--project-dir app` (auto-detected one level below the root when the root has
+no project file), and `--command test=<cmd>` supplies a proof command when
+none is detectable; without at least one proof command init refuses rather
+than write an invalid config. The harness commit the CI runs must already be
+pushed to the yukl-os remote, so push first or pass `--yukl-pin <sha>`.
+Re-run init after a merge to update the generated files, passing `--force` to
+overwrite an existing config; everything else is left alone.
 
 **3. Declare your intent, then run the pipeline from Orca.**
 

@@ -10,9 +10,12 @@ import {
   YUKL_BEGIN,
   YUKL_END,
   applyYuklSection,
+  assembleCommands,
   detectDefaultBranch,
   detectNodeCommands,
+  detectProjectDirs,
   detectPythonCommands,
+  detectPythonExtras,
   renderCiWorkflow,
   renderYuklConfig,
   renderYuklSection,
@@ -67,10 +70,14 @@ function commitAll(dir, message) {
   git(["commit", "-q", "-m", message], dir);
 }
 
-function runInitCli(dir, extraArgs = []) {
+// The pin reachability check (F4) would need the network in fixtures, so
+// most CLI runs opt out via YUKL_PIN_CHECK=off; the refusal path is covered
+// separately with the real checker and with injected checkers.
+function runInitCli(dir, extraArgs = [], envPatch = { YUKL_PIN_CHECK: "off" }) {
   return spawnSync(process.execPath, [YUKL, "init", "--cwd", dir, ...extraArgs], {
     encoding: "utf8",
     timeout: 60000,
+    env: { ...process.env, ...envPatch },
   });
 }
 
@@ -117,11 +124,97 @@ test("detectPythonCommands yields nulls without a pyproject.toml", () => {
   assert.equal(python.test, null);
 });
 
-test("renderYuklConfig writes null for undetected commands and allowlists only detected ones", () => {
-  const config = renderYuklConfig(
-    { build: "npm run build", test: null, format: null, lint: null },
-    { check: "ruff check", test: null },
+test("detectPythonExtras finds dev, then test, then none (line scan limits)", () => {
+  assert.equal(detectPythonExtras('[project.optional-dependencies]\ndev = ["ruff"]\n'), "dev");
+  assert.equal(detectPythonExtras("[project.optional-dependencies]\ntest = []\n"), "test");
+  assert.equal(
+    detectPythonExtras('[project.optional-dependencies]\n"dev" = []\n'),
+    "dev",
+    "quoted keys are detected",
   );
+  assert.equal(detectPythonExtras("[project.optional-dependencies]\ndocs = []\n"), null);
+  assert.equal(
+    detectPythonExtras("[tool.pytest.ini_options]\ndev = []\n"),
+    null,
+    "extras only count under the optional-dependencies table",
+  );
+  assert.equal(
+    detectPythonExtras("[project.optional-dependencies]\n[tool.x]\ndev = []\n"),
+    null,
+    "a following table header ends the extras table",
+  );
+});
+
+test("detectProjectDirs auto-detects projects one level below the root with a warning", async () => {
+  await withTempDir(async (dir) => {
+    writeTreeFile(dir, "app/pyproject.toml", "[tool.ruff]\n");
+    writeTreeFile(dir, "web/package.json", "{}");
+    writeTreeFile(dir, "docs/pyproject.toml", "x");
+    mkdirSync(join(dir, ".hidden"), { recursive: true });
+    writeFileSync(join(dir, ".hidden", "pyproject.toml"), "x");
+    mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "pkg", "package.json"), "{}");
+
+    const result = detectProjectDirs(dir);
+    assert.deepEqual(result.dirs, ["", "app", "docs", "web"], "sorted, hidden dirs ignored");
+    assert.match(result.warnings[0], /auto-detected projects one level below the root/);
+    assert.match(result.warnings[0], /app\/pyproject\.toml/);
+  });
+});
+
+test("detectProjectDirs skips auto-detection when the root has a project file", async () => {
+  await withTempDir(async (dir) => {
+    writeTreeFile(dir, "package.json", "{}");
+    writeTreeFile(dir, "app/pyproject.toml", "x");
+    const result = detectProjectDirs(dir);
+    assert.deepEqual(result.dirs, [""]);
+    assert.deepEqual(result.warnings, []);
+  });
+});
+
+test("detectProjectDirs honours explicit --project-dir and rejects bad values", async () => {
+  await withTempDir(async (dir) => {
+    writeTreeFile(dir, "app/pyproject.toml", "x");
+    const explicit = detectProjectDirs(dir, ["app"]);
+    assert.deepEqual(explicit.dirs, ["", "app"]);
+    assert.deepEqual(explicit.warnings, [], "explicit dirs suppress auto-detection");
+    assert.match(detectProjectDirs(dir, ["nested/dir"]).error, /single relative directory/);
+    assert.match(detectProjectDirs(dir, ["missing"]).error, /does not exist/);
+    assert.match(detectProjectDirs(dir, ["."]).error, /single relative directory/);
+  });
+});
+
+test("assembleCommands prefixes subdirectory commands with cd and warns on collisions", () => {
+  const empty = { build: null, test: null, format: null, lint: null };
+  const result = assembleCommands([
+    { dir: "", node: { ...empty, build: "npm run build" }, python: { check: null, test: null } },
+    {
+      dir: "app",
+      node: empty,
+      python: { check: "python -m ruff check", test: null },
+    },
+  ]);
+  assert.equal(result.commands.build, "npm run build", "root commands stay unprefixed");
+  assert.equal(result.commands.python_check, "cd app && python -m ruff check");
+  assert.deepEqual(result.warnings, []);
+
+  const collision = assembleCommands([
+    { dir: "", node: { ...empty, build: "npm run build" }, python: { check: null, test: null } },
+    { dir: "app", node: { ...empty, build: "npm run build" }, python: { check: null, test: null } },
+  ]);
+  assert.match(collision.warnings[0], /commands\.build from "app" ignored/);
+  assert.equal(collision.commands.build, "npm run build", "the root detection wins");
+});
+
+test("renderYuklConfig writes null for undetected commands and allowlists only detected ones", () => {
+  const config = renderYuklConfig({
+    build: "npm run build",
+    test: null,
+    format: null,
+    lint: null,
+    python_check: "ruff check",
+    python_test: null,
+  });
   assert.equal(config.commands.build, "npm run build");
   assert.equal(config.commands.test, null);
   assert.equal(config.commands.python_check, "ruff check");
@@ -220,14 +313,60 @@ test("renderCiWorkflow sets up Python and runs python checks only when detected"
   assert.match(workflow, /ruff check/);
   assert.match(workflow, /pytest/);
   assert.ok(!workflow.includes("npm ci"), "no npm commands -> no npm ci");
+  assert.ok(
+    !workflow.includes("Install Python dependencies"),
+    "no python install line without an explicit install",
+  );
   assert.doesNotMatch(workflow, /\{PYTHON_SETUP\}|\{CHECKS\}/, "no placeholders may remain");
   const doc = yaml.load(workflow);
   assert.equal(doc.jobs["verify-contract"].steps.length, 5);
 });
 
+test("renderCiWorkflow installs dev extras or falls back to the detected tools (F3)", () => {
+  const withExtras = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc",
+    commands: { ...NO_CMDS, python_check: "cd app && python -m ruff check" },
+    pythonInstall: 'pip install -e "app[dev]"',
+  });
+  assert.match(withExtras, /Install Python dependencies/);
+  assert.match(withExtras, /pip install -e "app\[dev\]"/);
+
+  const fallback = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc",
+    commands: { ...NO_CMDS, python_check: "ruff check" },
+    pythonInstall: "pip install ruff pytest",
+  });
+  assert.match(fallback, /pip install ruff pytest/);
+
+  const none = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc",
+    commands: { ...NO_CMDS, build: "npm run build" },
+  });
+  assert.ok(!none.includes("Install Python dependencies"));
+  assert.ok(!none.includes("pip install"));
+});
+
+test("renderCiWorkflow emits one npm ci line per node project directory", () => {
+  const workflow = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc",
+    commands: { ...NO_CMDS, build: "npm run build", test: "cd app && npm run test" },
+    npmInstalls: ["if [ -f package.json ]; then npm ci; fi", "cd app && npm ci"],
+  });
+  assert.match(workflow, /if \[ -f package\.json \]; then npm ci; fi/);
+  assert.match(workflow, /cd app && npm ci/);
+  assert.match(workflow, /cd app && npm run test/);
+});
+
 test("renderCiWorkflow leaves no placeholders and prints a notice when nothing is detected", () => {
   const workflow = renderCiWorkflow({ baseRef: "main", yuklPin: "abc", commands: NO_CMDS });
-  assert.doesNotMatch(workflow, /\{BASE_REF\}|\{YUKL_PIN\}|\{PYTHON_SETUP\}|\{CHECKS\}/);
+  assert.doesNotMatch(
+    workflow,
+    /\{BASE_REF\}|\{YUKL_PIN\}|\{PYTHON_SETUP\}|\{PYTHON_INSTALL\}|\{CHECKS\}/,
+  );
   assert.match(workflow, /no repository checks detected/);
 });
 
@@ -322,7 +461,14 @@ test("init a python-only repo: ruff and pytest detected, python setup in CI, no 
     assert.match(workflow, /actions\/setup-python@v5/);
     assert.match(workflow, /ruff check/);
     assert.match(workflow, /pytest/);
+    assert.match(
+      workflow,
+      /pip install ruff pytest/,
+      "without a dev/test extra the CI installs the detected tools (F3)",
+    );
+    assert.ok(!workflow.includes("pip install -e"), "no extras -> no editable install");
     assert.ok(!workflow.includes("npm ci"), "a repo without package.json must not run npm ci");
+    assert.match(result.stderr, /no dev\/test extra/);
     assert.match(result.stderr, /CLAUDE\.md does not exist/);
   });
 });
@@ -356,6 +502,98 @@ test("init a mixed repo detects node and python commands", async () => {
     const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
     assert.match(workflow, /npm ci/);
     assert.match(workflow, /setup-python@v5/);
+  });
+});
+
+test("init mirrors the pathfinder layout: Python in app/ with dev extras, auto-detected (F5)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(
+      dir,
+      "app/pyproject.toml",
+      [
+        "[project]",
+        'name = "pathfinder"',
+        "",
+        "[project.optional-dependencies]",
+        "dev = [",
+        '  "ruff",',
+        '  "pytest",',
+        "]",
+        "",
+        "[tool.ruff]",
+        "",
+        "[tool.pytest.ini_options]",
+        'testpaths = ["tests"]',
+        "",
+      ].join("\n"),
+    );
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInitCli(dir);
+    assert.equal(result.status, 0, `init failed:\n${result.stdout}\n${result.stderr}`);
+    assert.match(
+      result.stderr,
+      /auto-detected projects one level below the root: app\/pyproject\.toml/,
+    );
+    assert.match(result.stderr, /CLAUDE\.md does not exist/);
+    assert.match(result.stderr, /AGENTS\.md does not exist/);
+    assert.match(result.stderr, /GEMINI\.md does not exist/);
+
+    const config = JSON.parse(readFileSync(join(dir, "yukl.config.json"), "utf8"));
+    assert.equal(config.commands.python_check, "cd app && python -m ruff check");
+    assert.equal(config.commands.python_test, "cd app && python -m pytest");
+    assert.equal(config.commands.build, null);
+    assert.deepEqual(config.allowlist, [
+      "cd app && python -m ruff check",
+      "cd app && python -m pytest",
+    ]);
+    assert.deepEqual(
+      yuklConfigViolations(config),
+      [],
+      "the generated config must satisfy the schema (F1)",
+    );
+
+    const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
+    assert.match(workflow, /actions\/setup-python@v5/);
+    assert.match(workflow, /pip install -e "app\[dev\]"/);
+    assert.match(workflow, /cd app && python -m ruff check/);
+    assert.match(workflow, /cd app && python -m pytest/);
+    assert.ok(!workflow.includes("npm ci"), "no package.json anywhere -> no npm ci");
+    const doc = yaml.load(workflow);
+    assert.equal(doc.jobs["verify-contract"].steps.length, 6);
+  });
+});
+
+test("init honours an explicit --project-dir app without auto-detection warnings (F5)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(
+      dir,
+      "app/pyproject.toml",
+      [
+        "[project.optional-dependencies]",
+        "test = [",
+        '  "pytest",',
+        "]",
+        "[tool.pytest.ini_options]",
+        "",
+      ].join("\n"),
+    );
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInitCli(dir, ["--project-dir", "app"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(
+      !result.stderr.includes("auto-detected"),
+      "an explicit --project-dir suppresses auto-detection",
+    );
+    const config = JSON.parse(readFileSync(join(dir, "yukl.config.json"), "utf8"));
+    assert.equal(config.commands.python_test, "cd app && python -m pytest");
+    assert.equal(config.commands.python_check, null, "no [tool.ruff] -> no check command");
+    assert.deepEqual(config.allowlist, ["cd app && python -m pytest"]);
+    const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
+    assert.match(workflow, /pip install -e "app\[test\]"/);
   });
 });
 
@@ -473,6 +711,7 @@ test("init works in a git worktree (.git is a file) on a named branch", async ()
     git(["config", "user.name", "Yukl Test"], main);
     git(["config", "user.email", "yukl-test@example.com"], main);
     writeTreeFile(main, "README.md", "x");
+    writeTreeFile(main, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
     commitAll(main, "base");
     const wt = join(dir, "wt");
     git(["worktree", "add", "-q", "-b", "feature-wt", wt], main);
@@ -540,6 +779,7 @@ test(
 
       jj(dir, ["new"]);
       writeTreeFile(dir, "src/x.js", "x\n");
+      writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
       const allowed = runInitCli(dir);
       assert.equal(
         allowed.status,
@@ -591,12 +831,113 @@ test("init leaves an existing yukl.config.json alone unless --force is passed", 
 });
 
 // ---------------------------------------------------------------------------
+// F1: the allowlist may never be empty, and --command supplies commands
+// ---------------------------------------------------------------------------
+
+test("init refuses with no writes when no proof command is detectable and names --command (F1)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "README.md", "x");
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInitCli(dir);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /no proof commands detected/);
+    assert.match(result.stderr, /--command <key>=<command>/);
+    assertNoInitWrites(dir);
+  });
+});
+
+test("init accepts --command overrides that feed the allowlist (F1)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "README.md", "x");
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInitCli(dir, ["--command", "test=node --version"]);
+    assert.equal(result.status, 0, `init failed:\n${result.stderr}`);
+    const config = JSON.parse(readFileSync(join(dir, "yukl.config.json"), "utf8"));
+    assert.equal(config.commands.test, "node --version");
+    assert.deepEqual(config.allowlist, ["node --version"]);
+    assert.deepEqual(yuklConfigViolations(config), []);
+    const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
+    assert.match(workflow, /node --version/);
+  });
+});
+
+test("init rejects a malformed or unknown --command key with no writes (F1)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "README.md", "x");
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const badSyntax = runInitCli(dir, ["--command", "test"]);
+    assert.equal(badSyntax.status, 1);
+    assert.match(badSyntax.stderr, /must be <key>=<command>/);
+
+    const badKey = runInitCli(dir, ["--command", "deploy=npm run deploy"]);
+    assert.equal(badKey.status, 1);
+    assert.match(badKey.stderr, /unknown key "deploy"/);
+
+    assertNoInitWrites(dir);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F4: the pin must be pushed to the yukl-os remote
+// ---------------------------------------------------------------------------
+
+test("init refuses when the pin is not pushed (F4, injected check)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInit({ cwd: dir, yuklPin: "deadbeef", checkPinReachable: () => false });
+    assert.equal(result.ok, false);
+    assert.match(
+      result.error,
+      /pin deadbeef is not pushed; push it or pass --yukl-pin <pushed sha>/,
+    );
+    assert.deepEqual(result.writes, []);
+    assertNoInitWrites(dir);
+  });
+});
+
+test("init succeeds when the injected check confirms the pin is pushed (F4)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInit({ cwd: dir, yuklPin: "deadbeef", checkPinReachable: () => true });
+    assert.equal(result.ok, true, result.error);
+    const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
+    assert.match(workflow, /yukl-os#deadbeef/);
+  });
+});
+
+test("init refuses on the real checker when the auto-detected HEAD pin is unpushed (F4)", async () => {
+  await withFixtureRepo(async (dir) => {
+    writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
+    commitAll(dir, "base");
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInitCli(dir, [], { YUKL_PIN_CHECK: "" });
+    assert.equal(result.status, 1, `expected an unpushed-pin refusal:\n${result.stderr}`);
+    assert.match(result.stderr, /is not pushed/);
+    assertNoInitWrites(dir);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // bootstrap guard in CI (criterion 9): both base states
 // ---------------------------------------------------------------------------
 
 test("bootstrap: the CI guard skips verify without the config at the base and runs it once merged", async () => {
   await withFixtureRepo(async (dir) => {
     writeTreeFile(dir, "README.md", "x");
+    writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
     commitAll(dir, "base");
     git(["checkout", "-q", "-b", "feature"], dir);
 

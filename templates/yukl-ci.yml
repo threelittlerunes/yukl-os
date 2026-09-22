@@ -18,6 +18,7 @@ jobs:
           node-version: 22
 
 {PYTHON_SETUP}
+{PYTHON_INSTALL}
       - name: Run repository checks
         run: |
 {CHECKS}
