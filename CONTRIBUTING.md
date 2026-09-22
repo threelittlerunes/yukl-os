@@ -40,6 +40,18 @@ if it does not, trim the rule rather than raising the budget silently.
 - **Taxonomy**: French & Raven's bases of power and Yukl's influence tactics are
   distinct frameworks. Keep them separate in prose and in code.
 
+## Deterministic-first validation
+
+Every new validation check must prove itself before it ships:
+
+- **Fault injection:** demonstrate the check catches the defect by running it
+  against a deliberately broken fixture and showing a non-zero result.
+- **Gap evidence:** show the defect class was previously left to LLM review -
+  that is, no structural check existed before yours.
+- **Right home:** structural checks belong in `npm run build` or `npm run test`,
+  not in ad-hoc LLM audit passes. If a check cannot run deterministically, it
+  does not go into the harness.
+
 ## Pull request process
 
 1. Fork the repository and create a topic branch.
