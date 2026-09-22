@@ -1,0 +1,5 @@
+{
+  "task_id": "different-name",
+  "empirical_proof": [{ "command": "node -e \"process.exit(0)\"", "expected_exit_code": 0 }],
+  "files_touched": ["tests/fixtures/contract-mismatch.json"]
+}

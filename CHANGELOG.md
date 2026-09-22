@@ -6,11 +6,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Agent-agnostic runtime: `yukl render` and `yukl verify` (`scripts/yukl.js`)
+  plus a `verify-contract` CI job for committed Rational Persuasion contracts,
+  designed to be the merge gate and blocking merges once it is configured as a
+  required status check on the default branch (task B).
+- Committed contract evidence: `.orchestration/contracts/*.json` is now
+  tracked in version control (tasks A, B and C).
+- Phase 5 scoping note in `docs/SDLC_PLAN.md` (task C).
+- `AGENTS.md` mirroring `CLAUDE.md` with a byte-identity sync test (task A).
+
+### Changed
+- `{out}`, `{reads}` and `<task_id>` are substituted by `yukl render`; no agent
+  runtime is assumed (task B).
+- `js-yaml` moved to `dependencies`: the verify runtime parses
+  `.yukl-intent.yml` (task B).
+- `package.json` marked private at version 2.1.0 (task A).
+
+### Fixed
+- `yukl verify` rejects any `expected_exit_code` other than 0, closing a gate
+  bypass where a failing test could be claimed as passing proof (task B2).
+- Docs-only pull requests pass `yukl verify --base` without a contract file;
+  the contract requirement applies to code changes (task B2).
+- Unsafe `npx` invocation guidance replaced with `npm run verify -- --base
+  origin/main`; the gate is not a sandbox and the docs now say so (task B2).
+- `yukl verify` times out hung proof commands after 600000 ms by default
+  (overridable via `--timeout-ms`), so a hanging command can no longer hang the
+  gate (task B3).
+- `yukl verify --base` now warns on stderr when the working tree carries
+  uncommitted or untracked changes, since the preview checks committed state
+  only (base...HEAD) (task B3).
+
 ### Planned
 - Scheduled artifact purge implementing the retention policy in
   `.orchestration/artifacts/README.md`.
 - GitHub Action implementing the Phase 5 feedback loop (see `docs/SDLC_PLAN.md`).
-- Skill/plugin entry point for Orca runtime integration.
 - Phase 3 autonomous loop scheduling.
 
 ## [2.1.0] - 2026-09-22

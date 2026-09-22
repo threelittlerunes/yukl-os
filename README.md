@@ -106,6 +106,10 @@ Power bases originate from French & Raven (1959); Yukl's taxonomy (1990) integra
 
 Two non-mappings are deliberate. **Referent power** (influence through admiration) is a human social mechanism with no meaningful agent equivalent, so the harness does not claim it. **Reward power** is a known gap, recorded in section 3.2 of the architecture document.
 
+## Agent support
+
+The harness is agent-agnostic. `CLAUDE.md` carries the constitution for Claude Code, and `AGENTS.md` carries the same rules for agents that read AGENTS.md. Whichever agent writes the code, the deterministic checks - `npm run build`, `npm run test` and CI - are the binding layer that verifies it.
+
 ## Architecture
 
 The harness treats the repository as a constitution and the pipeline as its enforcement. A router stage establishes the scope, a Drafter implements inside an isolated worktree, and an Auditor executes the Drafter's empirical proof before approving the work. Instruction budgets, path-scoped rules and advisory locks keep every agent inside its lane. The full rationale, the 12-Factor Agents gap analysis and the known capability gaps live in [docs/YUKL_ARCHITECTURE.md](docs/YUKL_ARCHITECTURE.md).
