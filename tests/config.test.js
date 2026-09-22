@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson, readYaml } from "../scripts/lib/harness.js";
+import { validateFlowConfig, validateIntent } from "../scripts/validate-config.js";
 import {
-  validateFlowConfig,
-  validateIntent,
   validateGithubStandards,
   validateOrcaYaml,
   validateShippedFiles,
-} from "../scripts/validate-config.js";
+} from "../scripts/repo-checks.js";
 
 test("flow.config.json parses and satisfies the pipeline schema", () => {
   const raw = readJson("flow.config.json");
