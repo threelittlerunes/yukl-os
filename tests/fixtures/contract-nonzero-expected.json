@@ -1,0 +1,5 @@
+{
+  "task_id": "contract-nonzero-expected",
+  "empirical_proof": [{ "command": "node -e \"process.exit(0)\"", "expected_exit_code": 1 }],
+  "files_touched": ["tests/fixtures/contract-nonzero-expected.json"]
+}

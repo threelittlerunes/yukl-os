@@ -149,6 +149,11 @@ A finding reported by only one pass is not silently dropped: it is escalated to
 human review, where a person decides whether it is real or a false positive.
 P2 findings never block a merge on their own.
 
-This section is design and documentation only. The rule takes effect when the
-Orca flow engine supports consensus gates (section 3.3); until then the single
-auditor in `flow.config.json` remains authoritative.
+The consensus-gating rule is a review policy, not an automated gate: no tool
+enforces it. Any agent can render the review stages with
+`yukl render <stage> --config review.config.json --task-id <id>`, which prints
+each stage's prompt with its placeholders filled in; running the two passes
+and the consensus step is done by agents or people. The deterministic merge
+gate is the `verify-contract` CI job (`yukl verify`) plus the `validate` job,
+both required status checks on `main`. Consensus review is supplementary
+judgement on top of that gate, never a replacement for it.
