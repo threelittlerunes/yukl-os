@@ -1214,14 +1214,18 @@ export function pinReachableOnOrigin(pin) {
  * The workflow sets up Node always, sets up Python and installs the
  * project's dependencies (with dev/test extras when pyproject.toml declares
  * them, the detected tools otherwise) only when a Python command was
- * detected, runs exactly the detected checks, and gates the PR on
+ * detected, runs exactly the detected checks - each in its own subshell so
+ * a subdirectory `cd` cannot leak into the next line - and gates the PR on
  * `yukl verify --base origin/<base_ref>` running a PINNED yukl commit via
- * `npm exec --package=github:threelittlerunes/yukl-os#<sha>`. On the
- * bootstrap PR (no yukl.config.json at the base ref) the verify step prints
- * the bootstrap message and exits 0: that first PR is gated by human review.
- * The workflow is Linux-only (ubuntu-latest, sh); every recorded command
- * uses only `cd` and `&&`, which are equally valid in cmd and PowerShell.
- * Pure function over the template file.
+ * `npm exec --package=github:threelittlerunes/yukl-os#<sha>`. The verify
+ * step fails closed when the pinned yukl produces no check lines: a yukl-os
+ * commit from before the task h bin-shim fix exits 0 silently through the
+ * npm shim, and the guard turns that into a hard failure naming the pin. On
+ * the bootstrap PR (no yukl.config.json at the base ref) the verify step
+ * prints the bootstrap message and exits 0: that first PR is gated by human
+ * review. The workflow is Linux-only (ubuntu-latest, sh); every recorded
+ * command uses only `cd` and `&&`, which are equally valid in cmd and
+ * PowerShell. Pure function over the template file.
  */
 export function renderCiWorkflow({
   baseRef,
@@ -1239,11 +1243,14 @@ export function renderCiWorkflow({
   );
 
   const checks = [];
-  for (const line of npmInstalls) checks.push(`          ${line}`);
-  for (const [, command] of npmCommands) checks.push(`          ${command}`);
-  for (const [, command] of pythonCommands) checks.push(`          ${command}`);
+  // Every line runs in its own subshell so a `cd <dir> && ` prefix in one
+  // command cannot change the working directory for the next line (a second
+  // `cd app` from inside app/ would fail and turn every PR red).
+  for (const line of npmInstalls) checks.push(`          ( ${line} )`);
+  for (const [, command] of npmCommands) checks.push(`          ( ${command} )`);
+  for (const [, command] of pythonCommands) checks.push(`          ( ${command} )`);
   if (checks.length === 0) {
-    checks.push('          echo "yukl: no repository checks detected"');
+    checks.push('          ( echo "yukl: no repository checks detected" )');
   }
 
   const pythonSetup =
