@@ -1,0 +1,13 @@
+{
+  "task_id": "v2-w0-test-runner",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w0-test-runner.json",
+    "package.json",
+    "scripts/run-tests.js",
+    "tests/run-tests.test.js"
+  ]
+}
