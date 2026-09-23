@@ -83,6 +83,32 @@ function seedStageDone(dir, taskId, stage, to) {
   });
 }
 
+/** Seed a valid log up to the integrate stage, so integrate is the current stage. */
+function seedToIntegrate(dir, taskId) {
+  for (const [stage, to] of [
+    ["intent", "scope"],
+    ["scope", "plan"],
+    ["plan", "implement"],
+    ["implement", "prove"],
+    ["prove", "audit"],
+    ["audit", "review"],
+    ["review", "integrate"],
+  ]) {
+    seedStageDone(dir, taskId, stage, to);
+  }
+}
+
+/** A dispatch context that names the branch and base for integrate. */
+function integrateDispatch(stage, taskId) {
+  return {
+    actor: `agent-${stage}`,
+    env: { YUKL_DISPATCH_ID: `agent-${stage}` },
+    ref: "feature",
+    base: "main",
+    spec: `${taskId}-${stage}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // control: with stubbed deps the happy path reaches done
 // ---------------------------------------------------------------------------
@@ -102,12 +128,13 @@ test("with stubbed deps the happy path reaches done", async () => {
     assert.equal(done[0].anchor.commit, MERGE_SHA);
 
     const started = log.events.filter((e) => e.type === "stage_started");
-    assert.equal(started.length, 7, "every agent stage is started exactly once");
+    assert.equal(started.length, 8, "every agent stage and integrate is started exactly once");
     assert.deepEqual(
       started.map((e) => e.data.stage),
-      ["intent", "scope", "plan", "implement", "prove", "audit", "review"],
+      ["intent", "scope", "plan", "implement", "prove", "audit", "review", "integrate"],
     );
     assert.ok(started.every((e) => e.actor === "engine"));
+    assert.equal(started.at(-1).data.runtime, "vcs", "integrate is recorded as the vcs runtime");
 
     const next = await step({ taskId, deps: makeDeps(dir) });
     assert.equal(next.status, "terminal");
@@ -201,6 +228,41 @@ test("a stubbed enforcement refusal yields an enforcement event and no prove tra
   });
 });
 
+test("an enforcement refusal is recorded once across later steps", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-enforce-once";
+    const deps = makeDeps(dir, {
+      enforce: ({ stage }) =>
+        stage === "implement"
+          ? { ok: false, rule: "R-PATH-SCOPE", violations: ["nope"] }
+          : { ok: true, violations: [], rule: "R-PATH-SCOPE" },
+    });
+
+    const stopped = await runUntilBlocked({ taskId, deps, maxSteps: 64 });
+    assert.equal(stopped.status, "blocked");
+    assert.equal(stopped.stage, "implement");
+
+    const again1 = await step({ taskId, deps });
+    const again2 = await step({ taskId, deps });
+    assert.equal(again1.status, "enforced");
+    assert.equal(again2.status, "enforced");
+    assert.equal(again1.rule, "R-PATH-SCOPE");
+    assert.deepEqual(again1.violations, ["nope"]);
+
+    const log = readEvents(dir, taskId);
+    assert.equal(
+      log.events.filter((e) => e.type === "enforcement").length,
+      1,
+      "later steps must not append a second enforcement event",
+    );
+    assert.equal(
+      log.events.filter((e) => e.type === "stage_started" && e.data.stage === "implement").length,
+      1,
+      "the refused stage is not started again",
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // must reject: a stage that needs a human blocks the loop
 // ---------------------------------------------------------------------------
@@ -271,13 +333,7 @@ test("integrate merges with the log head as the run head", async () => {
     const taskId = "task-integrate";
     const merges = [];
     const deps = makeDeps(dir, {
-      dispatch: (stage, taskId_) => ({
-        actor: `agent-${stage}`,
-        env: { YUKL_DISPATCH_ID: `agent-${stage}` },
-        ref: "feature",
-        base: "main",
-        spec: `${taskId_}-${stage}`,
-      }),
+      dispatch: integrateDispatch,
       vcs: {
         merge: async (ref, base, options) => {
           merges.push({ ref, base, ...options });
@@ -307,6 +363,115 @@ test("integrate merges with the log head as the run head", async () => {
       headHash(before),
       "the run head is the log head just before the merge",
     );
+  });
+});
+
+test("a crash after the integrate merge does not call merge a second time", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-integrate-crash";
+    seedToIntegrate(dir, taskId);
+
+    let mergeCalls = 0;
+    const crashVcs = {
+      merge: async () => {
+        mergeCalls += 1;
+        throw new Error("crash after merge");
+      },
+    };
+    await assert.rejects(
+      step({ taskId, deps: makeDeps(dir, { dispatch: integrateDispatch, vcs: crashVcs }) }),
+      /crash after merge/,
+    );
+    assert.equal(mergeCalls, 1);
+
+    const crashed = readEvents(dir, taskId);
+    const marker = crashed.events.find(
+      (e) => e.type === "stage_started" && e.data.stage === "integrate",
+    );
+    assert.ok(marker, "the merge marker is recorded before the merge");
+    assert.equal(marker.data.runtime, "vcs");
+    assert.equal(marker.data.handle, `merge:${taskId}`);
+    assert.equal(
+      crashed.events.some((e) => e.type === "stage_done" && e.data.stage === "integrate"),
+      false,
+      "the crash leaves the integrate stage incomplete",
+    );
+
+    let secondMergeCalls = 0;
+    const recoveredVcs = {
+      merge: async () => {
+        secondMergeCalls += 1;
+        return { ok: true, sha: MERGE_SHA };
+      },
+      merged: async () => ({ ok: true, sha: MERGE_SHA }),
+    };
+    const recovered = await step({
+      taskId,
+      deps: makeDeps(dir, { dispatch: integrateDispatch, vcs: recoveredVcs }),
+    });
+    assert.equal(recovered.status, "advanced");
+    assert.equal(recovered.to, "done");
+    assert.equal(secondMergeCalls, 0, "the confirmed merge must not run a second time");
+  });
+});
+
+test("an integrate resume the VCS cannot confirm blocks for a human without merging", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-integrate-unverified";
+    seedToIntegrate(dir, taskId);
+    appendEvent(dir, taskId, {
+      type: "stage_started",
+      actor: "engine",
+      data: { stage: "integrate", runtime: "vcs", handle: `merge:${taskId}` },
+    });
+
+    let mergeCalls = 0;
+    const deps = makeDeps(dir, {
+      dispatch: integrateDispatch,
+      vcs: {
+        merge: async () => {
+          mergeCalls += 1;
+          return { ok: true, sha: MERGE_SHA };
+        },
+      },
+    });
+
+    const outcome = await step({ taskId, deps });
+    assert.equal(outcome.status, "blocked");
+    assert.equal(outcome.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(mergeCalls, 0, "an unverifiable resume must never merge blindly");
+  });
+});
+
+test("an integrate merge failure uses the shared observation shape", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-integrate-fail";
+    seedToIntegrate(dir, taskId);
+
+    const deps = makeDeps(dir, {
+      dispatch: integrateDispatch,
+      vcs: { merge: async () => ({ ok: false, error: "merge conflict" }) },
+      decide: () => ({ kind: "escalate", rule: "R-DIAGNOSE" }),
+    });
+
+    const outcome = await step({ taskId, deps });
+    assert.equal(outcome.status, "failed");
+    assert.deepEqual(outcome.observation, {
+      stage: "integrate",
+      runtimeRefused: true,
+      detail: "merge conflict",
+    });
+
+    const log = readEvents(dir, taskId);
+    const failed = log.events.find((e) => e.type === "stage_failed");
+    assert.equal(failed.data.runtime, "vcs");
+    assert.deepEqual(failed.data.observation, {
+      stage: "integrate",
+      runtimeRefused: true,
+      detail: "merge conflict",
+    });
+    assert.equal("mergeFailed" in failed.data.observation, false);
+    assert.equal("error" in failed.data.observation, false);
   });
 });
 

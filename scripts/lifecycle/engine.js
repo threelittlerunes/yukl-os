@@ -34,6 +34,7 @@ const ENGINE = "engine";
 const FALLBACK_PATH_SCOPE_RULE = "R-PATH-SCOPE";
 const FALLBACK_RUNTIME_ID = "runtime";
 const INTEGRATE_RUNTIME_ID = "vcs";
+const INTEGRATE_HANDLE_PREFIX = "merge:";
 
 /** The `human_decision` view of the stage machine only reads top-level fields,
  * but `appendEvent` does not persist them, so replay them from `data`. */
@@ -87,20 +88,28 @@ function isTerminal(stage, stages) {
 }
 
 /**
- * The handle of an open start for `stage`: the last event for the stage that
- * could move it is a `stage_started`, so the runtime is known to be running and
- * must be polled rather than started again. A later `stage_done` or
- * `stage_failed` closes the start, so a retry may start a fresh one.
+ * The open start for `stage`, if any: the handle of a runtime still running and
+ * any enforcement already recorded against it. A later `stage_done` or
+ * `stage_failed` closes the start, so a retry begins with no handle and no
+ * recorded enforcement. An `enforcement` event marks the open handle as already
+ * refused, so a later step returns that refusal instead of recording it again.
  */
-function openHandle(events, stage) {
-  let handle = null;
+function openStage(events, stage) {
+  const open = { handle: null, enforcement: null };
   for (const event of events) {
     if (event === null || typeof event !== "object") continue;
     if (event.data?.stage !== stage) continue;
-    if (event.type === "stage_started") handle = event.data?.handle ?? null;
-    else if (event.type === "stage_done" || event.type === "stage_failed") handle = null;
+    if (event.type === "stage_started") {
+      open.handle = event.data?.handle ?? null;
+      open.enforcement = null;
+    } else if (event.type === "enforcement") {
+      open.enforcement = { rule: event.data?.rule, violations: event.data?.violations };
+    } else if (event.type === "stage_done" || event.type === "stage_failed") {
+      open.handle = null;
+      open.enforcement = null;
+    }
   }
-  return handle;
+  return open;
 }
 
 /** Count the events of `type` whose `data.stage` is `stage`. */
@@ -210,6 +219,16 @@ async function resolveAnchor(deps, stage, taskId) {
   return { ok: false };
 }
 
+/** The outcome for a stage whose open handle was already refused by enforcement. */
+function enforcedOutcome(stage, enforcement) {
+  const rule =
+    typeof enforcement.rule === "string" && enforcement.rule !== ""
+      ? enforcement.rule
+      : FALLBACK_PATH_SCOPE_RULE;
+  const violations = Array.isArray(enforcement.violations) ? enforcement.violations : [];
+  return { status: STEP.ENFORCED, stage, rule, violations };
+}
+
 /**
  * Run the injected path enforcement after an agent stage finished. Returns an
  * outcome when enforcement refuses (after recording an `enforcement` event), or
@@ -225,7 +244,7 @@ async function enforceStage({ taskId, deps, state, stage }) {
       : FALLBACK_PATH_SCOPE_RULE;
   const violations = Array.isArray(outcome.violations) ? outcome.violations : [];
   append(deps, taskId, { type: "enforcement", actor: ENGINE, data: { stage, rule, violations } });
-  return { status: STEP.ENFORCED, stage, rule, violations };
+  return enforcedOutcome(stage, { rule, violations });
 }
 
 /**
@@ -307,35 +326,87 @@ async function failStage({ taskId, deps, state, log, stage, runtimeId, observati
   return { status: STEP.FAILED, stage, attempt, observation, decision };
 }
 
-/** Merge the task branch into the base with the log head as the run head. */
+/** True when the VCS confirms the integrate merge already happened. */
+function isMergeConfirmed(merged) {
+  if (merged === true) return true;
+  if (merged === null || typeof merged !== "object") return false;
+  return merged.ok === true || merged.merged === true;
+}
+
+/** The anchor for an integrate merge confirmed by the VCS, or null when none. */
+function mergeAnchor(dispatch, merged) {
+  if (dispatch.anchor) return dispatch.anchor;
+  const sha = merged !== null && typeof merged === "object" ? merged.sha : null;
+  if (typeof sha === "string" && sha !== "") return { path: dispatch.base ?? "", commit: sha };
+  return null;
+}
+
+/** Call the injected merge once and finish the stage, or diagnose a failure. */
+async function mergeIntegrate({ taskId, deps, state, stage, dispatch }) {
+  const current = deps.events.readEvents(deps.events.dir, taskId);
+  const hash = deps.events.headHash(current);
+  const merge = await deps.vcs.merge(dispatch.ref, dispatch.base, {
+    runHead: { taskId, hash },
+  });
+  if (merge === null || typeof merge !== "object" || merge.ok !== true) {
+    const detail =
+      typeof merge?.error === "string" && merge.error !== "" ? merge.error : "vcs merge failed";
+    return failStage({
+      taskId,
+      deps,
+      state,
+      log: current,
+      stage,
+      runtimeId: INTEGRATE_RUNTIME_ID,
+      observation: { stage, runtimeRefused: true, detail },
+    });
+  }
+  const anchor = dispatch.anchor ?? { path: dispatch.base ?? "", commit: merge.sha };
+  const actor = actorFor(deps, stage, taskId, null);
+  return completeStage({ taskId, deps, state, stage, anchor, actor });
+}
+
+/**
+ * Merge the task branch into the base with the log head as the run head. A
+ * `stage_started` marker is recorded before the merge, so a crash between the
+ * merge and the `stage_done` is visible on resume: the engine then asks the VCS
+ * whether the merge already happened and only merges again when it did not, or
+ * blocks for a human when the VCS cannot say.
+ */
 async function integrateStage({ taskId, deps, state, log }) {
   const stage = "integrate";
   if (deps.vcs === null || typeof deps.vcs !== "object" || typeof deps.vcs.merge !== "function") {
     return { status: STEP.BLOCKED, stage, rule: "R-NO-VCS" };
   }
   const dispatch = dispatchFor(deps, stage, taskId);
-  const hash = deps.events.headHash(log);
-  const merge = await deps.vcs.merge(dispatch.ref, dispatch.base, {
-    runHead: { taskId, hash },
-  });
-  if (merge === null || typeof merge !== "object" || merge.ok !== true) {
-    const runtimeId =
-      typeof dispatch.runtimeId === "string" && dispatch.runtimeId !== ""
-        ? dispatch.runtimeId
-        : INTEGRATE_RUNTIME_ID;
-    return failStage({
-      taskId,
-      deps,
-      state,
-      log,
-      stage,
-      runtimeId,
-      observation: { stage, mergeFailed: true, error: merge?.error ?? null },
-    });
+  const open = openStage(log.events, stage);
+
+  if (open.handle !== null) {
+    if (typeof deps.vcs.merged !== "function") {
+      return { status: STEP.BLOCKED, stage, rule: deps.stages.RULES.NEEDS_HUMAN };
+    }
+    const merged = await deps.vcs.merged(dispatch.ref, dispatch.base);
+    if (!isMergeConfirmed(merged)) {
+      return mergeIntegrate({ taskId, deps, state, stage, dispatch });
+    }
+    const anchor = mergeAnchor(dispatch, merged);
+    if (anchor === null) {
+      return { status: STEP.BLOCKED, stage, rule: deps.stages.RULES.NEEDS_HUMAN };
+    }
+    const actor = actorFor(deps, stage, taskId, null);
+    return completeStage({ taskId, deps, state, stage, anchor, actor });
   }
-  const anchor = dispatch.anchor ?? { path: dispatch.base ?? "", commit: merge.sha };
-  const actor = actorFor(deps, stage, taskId, null);
-  return completeStage({ taskId, deps, state, stage, anchor, actor });
+
+  append(deps, taskId, {
+    type: "stage_started",
+    actor: ENGINE,
+    data: {
+      stage,
+      runtime: INTEGRATE_RUNTIME_ID,
+      handle: `${INTEGRATE_HANDLE_PREFIX}${taskId}`,
+    },
+  });
+  return mergeIntegrate({ taskId, deps, state, stage, dispatch });
 }
 
 /** True when a diagnosis chose to escalate rather than to try again. */
@@ -403,13 +474,16 @@ function assertDeps(deps) {
  *     completion check. `context` is `{ taskId, state, log }`.
  *   - `enforce(context) -> { ok, violations?, rule? }`, optional; run after an
  *     agent stage finishes. `context` is `{ stage, taskId, state }`. A refusal
- *     is recorded as an `enforcement` event and stops the stage advancing.
+ *     is recorded as an `enforcement` event and stops the stage advancing; a
+ *     later step returns that recorded refusal instead of appending another.
  *   - `decide(observation, history) -> decision`, optional; the diagnosis run
  *     after a failure. `history` is `{ stage, state, attempts, decisions, at }`.
  *     Without it the engine escalates, because choosing an intervention is not
  *     its job.
- *   - `vcs`: `{ merge(ref, base, { runHead }) -> { ok, sha?, error? } }`, used
- *     on the `integrate` stage.
+ *   - `vcs`: `{ merge(ref, base, { runHead }) -> { ok, sha?, error? },
+ *     merged?(ref, base) -> true | { ok, sha? } }`, used on the `integrate`
+ *     stage. `merged` is optional and lets a resumed integrate confirm that a
+ *     crashed merge already happened.
  *   - `dispatch(stage, taskId) -> { actor, env?, worktree?, spec?, ref?, base?,
  *     anchor?, runtimeId? }`, optional; the per-stage launch context, used for
  *     the actor on `stage_done` and the merge arguments on `integrate`.
@@ -429,11 +503,12 @@ export async function step({ taskId, deps } = {}) {
   }
 
   const runtime = runtimeFor(deps, stage);
-  const handle = openHandle(log.events, stage);
+  const open = openStage(log.events, stage);
 
-  if (runtime !== null && handle !== null) {
-    const inspected = await inspectRuntime(runtime, handle);
-    if (!inspected.settled) return { status: STEP.WAITING, stage, handle };
+  if (runtime !== null && open.handle !== null) {
+    if (open.enforcement !== null) return enforcedOutcome(stage, open.enforcement);
+    const inspected = await inspectRuntime(runtime, open.handle);
+    if (!inspected.settled) return { status: STEP.WAITING, stage, handle: open.handle };
     if (inspected.ok) {
       return completeAgentStage({ taskId, deps, state, stage, runtime, result: inspected.result });
     }
