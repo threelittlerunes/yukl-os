@@ -1,0 +1,27 @@
+intent:
+  goal: "Correct four documentation claims: the README description of Yukl and French & Raven, the coalition-tactics gap in architecture section 3.2, the kill and retry loop presented as current behaviour, and enforcement mapped to coercive power."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+    forbidden_paths:
+      - ".claude/rules/**"
+      - ".github/**"
+      - ".orchestration/intents/**"
+      - "scripts/**"
+      - "tests/**"
+      - "templates/**"
+      - "docs/intents/**"
+      - "docs/SDLC_PLAN.md"
+      - "flow.config.json"
+      - "review.config.json"
+      - "yukl.config.json"
+      - "package.json"
+      - "package-lock.json"
+
+consultation:
+  requires_human_approval: false
