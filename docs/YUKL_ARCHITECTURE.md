@@ -54,7 +54,7 @@ Neither framework has twelve of anything: French & Raven give six bases, Yukl gi
 | Auditor (independent judgement) | French & Raven base | Expert power |
 | Contract verification loop | Yukl tactic | Rational persuasion |
 | Mandatory human scope interview | Yukl tactic | Consultation |
-| `onFailGoto` retry and process kill | French & Raven base | Coercive power |
+| `onFailGoto` retry and process kill (planned) | Structural design | Enforcement (engineering control) |
 | Situational control (isolated environment) | Structural design | Environment shapes behaviour |
 
 Two deliberate non-mappings are worth recording. **Referent power** - influence through admiration or identification - is a human social mechanism with no meaningful agent equivalent; the harness does not claim it. **Reward power** is listed as a known gap in section 3.2.
@@ -76,7 +76,7 @@ This ensures the instruction budget is spent exclusively on the immediate task.
 We abandon the monolithic generalist agent and partition execution across isolated **Git worktrees** using specialized agents.
 - **The Executive Orchestrator:** Holds Legitimate Power. Manages `flow.config.json` and delegates tasks. Never writes code.
 - **The Drafter:** Holds Expert Power. Operates in an isolated Git worktree. Its system prompt is aligned purely for deep implementation.
-- **The Auditor:** Holds Expert Power (independent specialist judgement) plus Coercive Power. Its instruction budget is spent entirely on verification.
+- **The Auditor:** Holds Expert Power (independent specialist judgement). Its instruction budget is spent entirely on verification.
 
 ### 2.7 Rational Persuasion (The Empirical Contract)
 *Influence through logical argument and evidence.*
@@ -87,11 +87,11 @@ An agent cannot complete a task via "vibes." It must exercise **Rational Persuas
 
 The Auditor ingests this contract and verifies the claims autonomously.
 
-### 2.8 Coercive Power (Tandem State Broker & Kill-Switches)
-*Influence through the ability to punish or restrict.*
+### 2.8 Enforcement Controls (Tandem State Broker & Kill-Switches)
+*Deterministic enforcement, not a base of power.*
 Because parallel agents operating in isolated worktrees will eventually encounter race conditions (for example both running `npm install`), the system uses an advisory **lock broker**. Agents acquire ephemeral `.lock` files in `.orchestration/locks/` before mutating shared resources.
 
-If an agent hallucinates a non-existent API, violates its path-scope, or fails the Auditor's contract check, the Orchestrator exercises Coercive Power: the process is killed, the Git worktree is removed (`git worktree remove`), and the loop restarts with a penalization prompt.
+If an agent hallucinates a non-existent API, violates its path-scope, or fails the Auditor's contract check, the planned enforcement is to kill the process, remove the Git worktree (`git worktree remove`) and restart the loop with a penalization prompt. This is planned behaviour, not implemented: `onFailGoto` and `maxRetries` in `flow.config.json` are only checked for well-formedness by `scripts/validate-config.js`; no code acts on them.
 
 ---
 
@@ -117,7 +117,7 @@ Addressed in this release: factor 10 (test like software) via `npm test`; factor
 ### 3.2 Known capability gaps
 
 - **Reward power** has no mechanism. There is no positive-reinforcement signal (priority boost, larger token budget) for good work. Planned: a stage-level score that raises the Drafter's retry budget after clean audits.
-- **Coalition tactics** have no mechanism. There is no multi-agent vote. Planned only if a second reviewer role is introduced.
+- **Coalition tactics** map to the dual-pipeline review mode and consensus gate in sections 3.3 and 3.4: a severe finding must be confirmed by a second, independent pass before it can block a merge. The consensus rule is a review policy, not enforced by a tool.
 - **Log retention** is documented but not yet enforced by a scheduled purge.
 
 ### 3.3 Dual-pipeline review mode
