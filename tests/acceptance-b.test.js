@@ -283,20 +283,7 @@ function seedThrough(stateDir, lastDone) {
 /** Check every decision event in a log with the real `assertDecision`. */
 function checkDecisionLog(events) {
   const decisions = events.filter((event) => event?.type === "decision");
-  for (const event of decisions) {
-    const decision = event.decision;
-    const hasRule = typeof decision?.rule === "string" && decision.rule.trim() !== "";
-    const hasInputsAndRationale =
-      decision?.inputs !== null &&
-      typeof decision?.inputs === "object" &&
-      typeof decision?.rationale === "string" &&
-      decision.rationale.trim() !== "";
-    assert.ok(
-      hasRule || hasInputsAndRationale,
-      "a decision must carry a rule, or inputs and a rationale",
-    );
-    assertDecision(decision);
-  }
+  for (const event of decisions) assertDecision(event.decision);
   return decisions;
 }
 
@@ -364,22 +351,26 @@ test("AC3 control: a failing implementation is diagnosed and the second interven
   });
 });
 
-test("AC3 must-reject: a failing input is never retried under the same (intervention, inputHash)", async () => {
+test("AC3 must-reject: a history that already holds the pairs escalates instead of repeating one", () => {
   const policy = { limits: { maxAttemptsPerStage: ATTEMPT_LIMIT } };
   const decide = decideFor(policy);
-  const observation = { stage: "prove", proofFailed: true, exitCode: 1, output: "boom" };
+  const observation = { stage: "implement", exitCode: 1 };
 
   const first = decide(observation, { decisions: [] });
   const second = decide(observation, { decisions: [first] });
+  const third = decide(observation, { decisions: [first, second] });
   assert.equal(first.intervention, "retry");
-  assert.notEqual(
-    pairOf(second),
-    pairOf(first),
-    "an unchanged failure must not be retried the same way",
-  );
+  assert.equal(second.intervention, "apprising");
+  assert.equal(third.intervention, "collaboration");
 
-  const pairs = [pairOf(first), pairOf(second)];
-  assert.equal(new Set(pairs).size, pairs.length, "the pair is not produced twice");
+  const used = new Set([first, second].map(pairOf));
+  const next = decide(observation, { decisions: [first, second] });
+  assert.equal(used.has(pairOf(next)), false, "a pair already used is not produced again");
+
+  const saturated = decide(observation, { decisions: [first, second, third] });
+  assert.equal(saturated.kind, "deterministic");
+  assert.equal(saturated.rule, DIAGNOSE_RULES.ATTEMPT_LIMIT);
+  assert.equal(saturated.intervention, "escalate");
 });
 
 // ---------------------------------------------------------------------------
@@ -424,20 +415,23 @@ test("AC5 control: every decision event in a full run carries a rule, or inputs 
   });
 });
 
-test("AC5 must-reject: a decision without inputs or a rationale fails the log check", () => {
+test("AC5 must-reject: a decision without inputs or a rationale fails assertDecision", () => {
   assert.throws(
     () =>
       checkDecisionLog([{ type: "decision", decision: { kind: "adaptive", intervention: "x" } }]),
-    /inputs/,
+    { message: "an adaptive decision needs inputs" },
   );
   assert.throws(
     () => checkDecisionLog([{ type: "decision", decision: { kind: "adaptive", inputs: {} } }]),
-    /rationale/,
+    { message: "an adaptive decision needs a non-empty rationale" },
   );
   assert.throws(
     () => checkDecisionLog([{ type: "decision", decision: { kind: "deterministic" } }]),
-    /rule/,
+    { message: "a deterministic decision needs a non-empty rule" },
   );
+  assert.throws(() => checkDecisionLog([{ type: "decision", decision: { kind: "guess" } }]), {
+    message: 'decision.kind must be "adaptive" or "deterministic"',
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -491,7 +485,7 @@ test("AC6 control: an audit finding reopens scope and a merged amendment complet
 });
 
 test("AC6 must-reject: an amendment only on an unmerged branch does not complete the reopened stage", async () => {
-  await withRepo(async ({ work, remote }) => {
+  await withRepo(async ({ work }) => {
     write(work, "docs/scope.md", "initial scope\n");
     const initial = commit(work, "add scope");
     git(work, ["push", "origin", "main"]);
@@ -503,7 +497,13 @@ test("AC6 must-reject: an amendment only on an unmerged branch does not complete
 
     assert.equal(gitOut(work, ["rev-parse", "main"]), initial);
     assert.equal(gitOut(work, ["rev-parse", "amendment"]), amended);
-    assert.ok(remote.length > 0, "the amendment is on the bare remote but not on the base");
+
+    const remoteHead = gitOut(work, ["ls-remote", "--heads", "origin", "amendment"]);
+    assert.match(
+      remoteHead,
+      new RegExp(`^${amended}\\s+refs/heads/amendment$`),
+      "the amendment branch is on the bare remote, not on the base",
+    );
 
     const result = reopenedStageComplete({
       cwd: work,
