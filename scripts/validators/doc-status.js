@@ -21,7 +21,11 @@ export const OPT_IN_MARKER = "<!-- yukl:doc-status -->";
 const OPT_IN_RE = /^<!--\s*yukl:doc-status\s*-->$/;
 const PLAIN_MARKER_RE = /^<!--\s*status:\s*(planned|background)\s*-->$/;
 const IMPLEMENTED_RE = /^<!--\s*status:\s*implemented\s+tests=(\S+?)#(.+?)\s*-->$/;
-const HEADING_RE = /^(#{2,3})\s+(.+)$/;
+// At most three leading spaces may precede a heading; four or more is an
+// indented code block. The match runs on the raw line, before trimming, so an
+// indented heading is still a heading but an indented code line is not.
+const HEADING_RE = /^ {0,3}(#{2,3})[ \t]+(.+?)[ \t]*$/;
+const FENCE_RE = /^(`{3,}|~{3,})/;
 
 function isOptedIn(text) {
   const firstLine = text.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] ?? "";
@@ -72,20 +76,23 @@ export function docStatusViolations(text, { root, relPath } = {}) {
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .split("\n");
-  let inFence = false;
+  let inFence = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed.startsWith("```")) {
-      inFence = !inFence;
+    const line = lines[i];
+    const fence = line.trim().match(FENCE_RE);
+    if (fence) {
+      const char = fence[1][0];
+      if (inFence === null) inFence = char;
+      else if (inFence === char) inFence = null;
       continue;
     }
-    if (inFence) continue;
+    if (inFence !== null) continue;
 
-    const heading = trimmed.match(HEADING_RE);
+    const heading = line.match(HEADING_RE);
     if (!heading) continue;
 
-    const label = `${relPath}:${i + 1}: heading "${heading[0]}"`;
+    const label = `${relPath}:${i + 1}: heading "${heading[1]} ${heading[2]}"`;
 
     let next = null;
     for (let j = i + 1; j < lines.length; j++) {
