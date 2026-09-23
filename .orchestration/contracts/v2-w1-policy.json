@@ -1,0 +1,14 @@
+{
+  "task_id": "v2-w1-policy",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w1-policy.json",
+    "scripts/lifecycle/policy.js",
+    "scripts/validators/policy.js",
+    "tests/lifecycle-policy.test.js",
+    "yukl.policy.json"
+  ]
+}
