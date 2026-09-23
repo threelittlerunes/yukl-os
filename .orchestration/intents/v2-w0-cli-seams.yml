@@ -1,0 +1,35 @@
+intent:
+  goal: "Dispatch unknown yukl commands to scripts/commands/<name>.js and load validators from scripts/validators/."
+  depends_on:
+    - "v2-w0-test-runner"
+  scope:
+    allowed_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/commands/.gitkeep"
+      - "scripts/validators/.gitkeep"
+      - "tests/seams.test.js"
+      - ".orchestration/contracts/v2-w0-cli-seams.json"
+    forbidden_paths:
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
