@@ -15,12 +15,16 @@
 //     allowlisted proof command list; when omitted it is resolved from
 //     yukl.config.json at `base` (default "main") so a caller that does not
 //     hold the allowlist cannot widen it.
-//   checks(ref) -> { ok, results: [{ command, exitCode }] }
+//   checks(ref) -> { ok, results: [{ command, exitCode, stderrTail? }] }
 //     Checks `ref` out in a temporary worktree, runs every proof command
-//     there with a shell and reports each exit code. `ok` is true only when
-//     every exit code is 0.
+//     there with a shell and reports each exit code. A failing entry also
+//     carries `stderrTail`, the last lines of the command's stderr, so a
+//     failed check is diagnosable. `ok` is true only when every exit code
+//     is 0.
 //   merge(ref, base, { runHead }) -> { ok, sha?, error? }
-//     Refuses, changing nothing, when `runHead` is incomplete or `checks(ref)`
+//     Refuses, changing nothing, when `runHead` is incomplete, when `base` is
+//     checked out in some worktree of the repository (moving the ref there
+//     would leave that working tree and its index stale) or when `checks(ref)`
 //     is not ok. Otherwise merges `ref` into `base` with `git merge --no-ff`
 //     in a temporary worktree and moves the base branch ref to the merge
 //     commit, whose message ends in the run-head trailer.
@@ -57,6 +61,30 @@ function runGit(args, cwd) {
 /** Full ref name for a base that is a branch name or already a full ref. */
 function branchRef(base) {
   return base.startsWith("refs/") ? base : `refs/heads/${base}`;
+}
+
+/**
+ * The full refs of every branch checked out in a worktree of `repoDir`,
+ * parsed from `git worktree list --porcelain`. A detached or bare worktree
+ * contributes nothing.
+ */
+function checkedOutBranches(repoDir) {
+  const branches = new Set();
+  const listed = runGit(["worktree", "list", "--porcelain"], repoDir);
+  if (listed.status !== 0) return branches;
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (line.startsWith("branch ")) branches.add(line.slice("branch ".length).trim());
+  }
+  return branches;
+}
+
+/** The last `count` non-empty lines of a command's stderr, or "". */
+function tailLines(text, count) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-count)
+    .join("\n");
 }
 
 /** Remove a temporary git worktree and its parent directory, ignoring errors. */
@@ -97,9 +125,15 @@ export function createVcs({ repoDir, commands = null, base = DEFAULT_BASE } = {}
         };
       }
       const results = allowlist.map((command) => {
-        const run = spawnSync(command, { shell: true, cwd: worktree, stdio: "ignore" });
+        const run = spawnSync(command, {
+          shell: true,
+          cwd: worktree,
+          encoding: "utf8",
+          stdio: ["ignore", "ignore", "pipe"],
+        });
         const exitCode = typeof run.status === "number" ? run.status : 1;
-        return { command, exitCode };
+        if (exitCode === 0) return { command, exitCode };
+        return { command, exitCode, stderrTail: tailLines(run.stderr, 20) };
       });
       return { ok: results.every((r) => r.exitCode === 0), results };
     } finally {
@@ -116,11 +150,6 @@ export function createVcs({ repoDir, commands = null, base = DEFAULT_BASE } = {}
       return { ok: false, error: err.message };
     }
 
-    const outcome = await checks(ref);
-    if (!outcome.ok) {
-      return { ok: false, error: `refusing to merge ${ref}: proof checks did not pass` };
-    }
-
     const fullRef = branchRef(baseRef);
     const before = runGit(["rev-parse", "--verify", fullRef], repoDir);
     if (before.status !== 0) {
@@ -128,6 +157,17 @@ export function createVcs({ repoDir, commands = null, base = DEFAULT_BASE } = {}
     }
     const oldSha = before.stdout.trim();
 
+    if (checkedOutBranches(repoDir).has(fullRef)) {
+      return {
+        ok: false,
+        error: `base ${baseRef} is checked out in a worktree of ${repoDir}; refusing to move it`,
+      };
+    }
+
+    const outcome = await checks(ref);
+    if (!outcome.ok) {
+      return { ok: false, error: `refusing to merge ${ref}: proof checks did not pass` };
+    }
     const tempRoot = mkdtempSync(join(tmpdir(), "yukl-vcs-"));
     const worktree = join(tempRoot, "checkout");
     try {
