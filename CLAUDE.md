@@ -4,9 +4,10 @@
 This repository is governed by the Yukl Power Harness. It maps French & Raven's bases of power and Yukl's influence tactics onto the Orca Agentic SDLC. Your cognitive instruction budget is limited; follow this progressive-disclosure routing.
 
 ## 1. Architectural Boundaries (Non-Negotiable)
-<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
-- **Tandem Concurrency:** You operate in an isolated Git worktree. Before mutating shared dependencies (e.g., `npm install`), acquire an advisory lock in `.orchestration/locks/` (a convention, not tool-enforced).
+<!-- status: planned -->
+- **Tandem Concurrency:** You operate in an isolated Git worktree. Before mutating shared dependencies (e.g., `npm install`), acquire an advisory lock in `.orchestration/locks/`.
 - **Zero-Trust Execution:** You do not hold the Legitimate Power to merge your own code. Hand all implementations to the Auditor through a Rational Persuasion contract.
+The contract handoff is enforced by `yukl verify`; the isolated worktree and the advisory lock are working conventions, not covered by a test.
 
 ## 2. Progressive Disclosure (Information Power)
 <!-- status: implemented tests=tests/rules.test.js#CLAUDE.md section 2 routes every rule file (V-1) -->
