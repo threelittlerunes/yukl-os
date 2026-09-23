@@ -1,0 +1,38 @@
+intent:
+  goal: "Add the runtime adapter interface, a fake adapter and the runtime-neutrality test."
+  depends_on:
+    - "v2-w0-test-runner"
+    - "v2-w0-cli-seams"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/runtime.js"
+      - "scripts/adapters/fake.js"
+      - "tests/lifecycle-runtime.test.js"
+      - "tests/runtime-neutrality.test.js"
+      - "tests/fixtures/neutrality/**"
+      - ".orchestration/contracts/v2-w1-runtime.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false

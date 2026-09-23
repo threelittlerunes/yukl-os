@@ -1,0 +1,38 @@
+intent:
+  goal: "Add the lifecycle engine step and run-until-blocked loop over injected dependencies."
+  depends_on:
+    - "v2-w1-events"
+    - "v2-w1-stages"
+    - "v2-w1-anchors"
+    - "v2-w1-policy"
+    - "v2-w1-runtime"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/engine.js"
+      - "tests/lifecycle-engine.test.js"
+      - ".orchestration/contracts/v2-w2-engine.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false

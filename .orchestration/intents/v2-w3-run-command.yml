@@ -1,0 +1,42 @@
+intent:
+  goal: "Add the yukl run command and the lifecycle config block with its validator."
+  depends_on:
+    - "v2-w2-diagnose"
+    - "v2-w2-track-record"
+    - "v2-w2-engine"
+    - "v2-w1-enforce"
+    - "v2-w2-orca-adapter"
+    - "v2-w2-vcs-git-local"
+    - "v2-w2-vcs-github"
+    - "v2-w2-reopen"
+  scope:
+    allowed_paths:
+      - "scripts/commands/run.js"
+      - "scripts/validators/lifecycle.js"
+      - "yukl.config.json"
+      - ".gitignore"
+      - "tests/command-run.test.js"
+      - ".orchestration/contracts/v2-w3-run-command.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.policy.json"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
