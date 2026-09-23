@@ -1,0 +1,39 @@
+name: yukl
+
+on:
+  pull_request:
+
+jobs:
+  verify-contract:
+    name: Yukl contract gate (Rational Persuasion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+{PYTHON_SETUP}
+{PYTHON_INSTALL}
+      - name: Run repository checks
+        run: |
+{CHECKS}
+      - name: Verify contracts (yukl)
+        run: |
+          if ! git cat-file -e "origin/${{ github.base_ref }}:yukl.config.json" 2>/dev/null; then
+            echo "bootstrap: harness not installed at base; this PR is gated by human review"
+            exit 0
+          fi
+          set +e
+          yukl_output=$(npm exec --yes --package="github:threelittlerunes/yukl-os#{YUKL_PIN}" -- yukl verify --base "origin/${{ github.base_ref }}" 2>&1)
+          yukl_status=$?
+          echo "$yukl_output"
+          if ! printf '%s' "$yukl_output" | grep -q -E '^(PASS|FAIL) '; then
+            echo "yukl produced no output; the pinned version {YUKL_PIN} cannot run via the npm bin shim, so pin a release that includes task h"
+            exit 1
+          fi
+          exit "$yukl_status"
