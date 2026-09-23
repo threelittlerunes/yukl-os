@@ -26,7 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import yaml from "js-yaml";
 
 export const CONTRACTS_DIR = ".orchestration/contracts";
@@ -1586,8 +1586,65 @@ function parseArgs(argv) {
   return { options };
 }
 
+const BUILTIN_COMMANDS = new Set(["render", "verify", "init"]);
+const COMMAND_NAME_RE = /^[a-z][a-z-]*$/;
+const COMMANDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "commands");
+
+/**
+ * True when `name` is shaped like a dispatchable command: lower-case ASCII
+ * letters and hyphens, starting with a letter. Purely syntactic; it neither
+ * touches the filesystem nor reserves the built-in commands.
+ */
+export function isCommandName(name) {
+  return typeof name === "string" && COMMAND_NAME_RE.test(name);
+}
+
+/**
+ * Load scripts/commands/<name>.js and run it. `run(argv)` receives the raw
+ * arguments after the command name and returns the exit code (a number) or
+ * throws. A missing module, a load failure or a thrown error all become a
+ * non-zero exit code with a one-line message and never a stack trace.
+ *
+ * `commandsDir` is injectable so tests can point at a temporary directory;
+ * the CLI resolves the default from this module's own location, never cwd.
+ */
+export async function dispatchCommand(name, argv, { commandsDir = COMMANDS_DIR } = {}) {
+  const file = join(commandsDir, `${name}.js`);
+  if (!existsSync(file)) {
+    console.error(`yukl: unknown command "${name}"\n\n${USAGE}`);
+    return 2;
+  }
+  let mod;
+  try {
+    mod = await import(pathToFileURL(file).href);
+  } catch (err) {
+    console.error(`yukl: command "${name}" failed to load: ${err?.message ?? err}`);
+    return 1;
+  }
+  try {
+    const code = await mod.run(argv);
+    return Number.isInteger(code) ? code : 0;
+  } catch (err) {
+    const code = Number.isInteger(err?.exitCode) ? err.exitCode : 1;
+    console.error(`yukl: command "${name}" failed: ${err?.message ?? err}`);
+    return code;
+  }
+}
+
 async function main() {
-  const { options, error } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const name = argv[0];
+  if (name !== undefined && !name.startsWith("-") && !BUILTIN_COMMANDS.has(name)) {
+    if (!isCommandName(name)) {
+      console.error(`yukl: unknown command "${name}"\n\n${USAGE}`);
+      process.exitCode = 2;
+      return;
+    }
+    const commandsDir = process.env.YUKL_COMMANDS_DIR ?? COMMANDS_DIR;
+    process.exitCode = await dispatchCommand(name, argv.slice(1), { commandsDir });
+    return;
+  }
+  const { options, error } = parseArgs(argv);
   if (error) {
     console.error(`yukl: ${error}\n\n${USAGE}`);
     process.exitCode = 2;
