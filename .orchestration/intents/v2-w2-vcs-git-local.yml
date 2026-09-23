@@ -1,0 +1,34 @@
+intent:
+  goal: "Add the local git VCS adapter that merges with a run-head trailer."
+  depends_on:
+    - "v2-w1-runtime"
+  scope:
+    allowed_paths:
+      - "scripts/adapters/vcs-git-local.js"
+      - "tests/adapter-vcs-git-local.test.js"
+      - ".orchestration/contracts/v2-w2-vcs-git-local.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false

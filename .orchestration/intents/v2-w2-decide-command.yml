@@ -1,0 +1,35 @@
+intent:
+  goal: "Add the yukl decide command that records human decisions."
+  depends_on:
+    - "v2-w1-events"
+    - "v2-w1-stages"
+  scope:
+    allowed_paths:
+      - "scripts/commands/decide.js"
+      - "tests/command-decide.test.js"
+      - ".orchestration/contracts/v2-w2-decide-command.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
