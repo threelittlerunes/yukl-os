@@ -87,6 +87,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (task G).
 
 ### Changed
+- French & Raven (1959) describe sources of power and Yukl & Falbe (1990)
+  describe influence tactics; the README no longer calls the two a unified
+  model (task i).
+- Architecture section 3.2 now points coalition tactics at the dual-pipeline
+  review mode and consensus gate in sections 3.3 and 3.4, which remain review
+  policy rather than a tool-enforced gate (task i).
+- The kill, worktree-removal and retry loop is marked as planned behaviour in
+  the README, architecture section 2.8, CLAUDE.md and AGENTS.md: `onFailGoto`
+  and `maxRetries` are only checked for well-formedness and no code acts on
+  them (task i).
+- `onFailGoto` retry and process kill reclassified from a French & Raven base
+  to structural design / enforcement in both mapping tables (task i).
 - `yukl verify --base` now reads both the command allowlist and the task
   intent from the base ref via `git show`, never from the working tree or
   HEAD, so a PR cannot widen its own allowlist or path scope; an intent that
