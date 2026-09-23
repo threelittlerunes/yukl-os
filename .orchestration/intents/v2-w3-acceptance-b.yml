@@ -1,0 +1,38 @@
+intent:
+  goal: "Add hermetic acceptance tests for AC3, AC5, AC6 and AC7."
+  depends_on:
+    - "v2-w2-diagnose"
+    - "v2-w2-engine"
+    - "v2-w2-vcs-git-local"
+    - "v2-w2-decide-command"
+    - "v2-w2-reopen"
+  scope:
+    allowed_paths:
+      - "tests/acceptance-b.test.js"
+      - "tests/fixtures/acceptance-b/**"
+      - ".orchestration/contracts/v2-w3-acceptance-b.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false

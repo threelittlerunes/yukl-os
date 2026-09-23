@@ -1,0 +1,33 @@
+intent:
+  goal: "Discover tests/*.test.js with scripts/run-tests.js and run the test scripts through it."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "package.json"
+      - "scripts/run-tests.js"
+      - "tests/run-tests.test.js"
+      - ".orchestration/contracts/v2-w0-test-runner.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
