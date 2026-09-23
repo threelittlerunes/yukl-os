@@ -1,12 +1,15 @@
+<!-- yukl:doc-status -->
 # Legitimate Power: Repository Constitution
 
 This repository is governed by the Yukl Power Harness. It maps French & Raven's bases of power and Yukl's influence tactics onto the Orca Agentic SDLC. Your cognitive instruction budget is limited; follow this progressive-disclosure routing.
 
 ## 1. Architectural Boundaries (Non-Negotiable)
-- **Tandem Concurrency:** You operate in an isolated Git worktree. Before mutating shared dependencies (e.g., `npm install`), acquire an advisory lock in `.orchestration/locks/`.
+<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
+- **Tandem Concurrency:** You operate in an isolated Git worktree. Before mutating shared dependencies (e.g., `npm install`), acquire an advisory lock in `.orchestration/locks/` (a convention, not tool-enforced).
 - **Zero-Trust Execution:** You do not hold the Legitimate Power to merge your own code. Hand all implementations to the Auditor through a Rational Persuasion contract.
 
 ## 2. Progressive Disclosure (Information Power)
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md section 2 routes every rule file (V-1) -->
 Do NOT guess conventions. Rely on path-scoped rules injected into your context:
 - If modifying `src/api/**` -> adhere to `.claude/rules/drafter-api.md`.
 - If modifying `src/ui/**` -> adhere to `.claude/rules/drafter-ui.md`.
@@ -15,6 +18,7 @@ Do NOT guess conventions. Rely on path-scoped rules injected into your context:
 - If auditing a plan -> adhere to `.claude/rules/independent-auditor.md`.
 
 ## 3. Rational Persuasion (The Contract)
+<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
 Before concluding a task, you MUST write your empirical proof to `.orchestration/contracts/<task_id>.json`.
 Provide:
 1. The terminal command used to verify the code (e.g., test runner, AST check).
@@ -22,6 +26,7 @@ Provide:
 3. The scope of files touched.
 
 ## 4. Commands
+<!-- status: background -->
 - Build: `npm run build`
 - Test: `npm run test`
 - Format: `npx @biomejs/biome format --write .`
