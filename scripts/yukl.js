@@ -1183,19 +1183,20 @@ export function resolveYuklPin({ cwd, yuklPin = null } = {}) {
  * (offline, authoritative for anything already fetched), then falls back to
  * scanning `git ls-remote` against the harness origin (the yukl-os repo,
  * with the well-known URL when no origin is configured, e.g. an npm
- * install). Fails closed: an offline scan counts as unreachable. Injected
- * in tests; the YUKL_PIN_CHECK=off environment variable skips the check for
- * offline runs and prints a warning.
+ * install). Fails closed: an offline scan counts as unreachable. The
+ * `root` is the harness checkout to inspect (injectable so tests can point
+ * the check at a local bare remote instead of the real one);
+ * YUKL_PIN_CHECK=off skips the check entirely with a warning.
  */
-export function pinReachableOnOrigin(pin) {
+export function pinReachableOnOrigin(pin, root = PACKAGE_ROOT) {
   const contains = spawnSync("git", ["branch", "-r", "--contains", pin], {
-    cwd: PACKAGE_ROOT,
+    cwd: root,
     encoding: "utf8",
     timeout: 30000,
   });
   if (contains.status === 0 && contains.stdout.trim() !== "") return true;
   const url = spawnSync("git", ["remote", "get-url", "origin"], {
-    cwd: PACKAGE_ROOT,
+    cwd: root,
     encoding: "utf8",
     timeout: 30000,
   });

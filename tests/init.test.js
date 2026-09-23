@@ -24,6 +24,7 @@ import {
   detectProjectDirs,
   detectPythonCommands,
   detectPythonExtras,
+  pinReachableOnOrigin,
   renderCiWorkflow,
   renderYuklConfig,
   renderYuklSection,
@@ -1138,16 +1139,59 @@ test("init succeeds when the injected check confirms the pin is pushed (F4)", as
   });
 });
 
-test("init refuses on the real checker when the auto-detected HEAD pin is unpushed (F4)", async () => {
-  await withFixtureRepo(async (dir) => {
-    writeTreeFile(dir, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
-    commitAll(dir, "base");
-    git(["checkout", "-q", "-b", "feature"], dir);
+test("F4 real checker, hermetic: a local bare remote with a pushed and an unpushed commit", async () => {
+  await withTempDir(async (dir) => {
+    // A bare repo standing in for the yukl-os remote, seeded with one
+    // commit pushed to main - no network, no dependence on this repo's
+    // own HEAD or remote state.
+    const remote = join(dir, "yukl-os.git");
+    mkdirSync(remote);
+    git(["-c", "init.defaultBranch=main", "init", "-q", "--bare"], remote);
 
-    const result = runInitCli(dir, [], { YUKL_PIN_CHECK: "" });
-    assert.equal(result.status, 1, `expected an unpushed-pin refusal:\n${result.stderr}`);
-    assert.match(result.stderr, /is not pushed/);
-    assertNoInitWrites(dir);
+    const seed = join(dir, "seed");
+    mkdirSync(seed);
+    git(["-c", "init.defaultBranch=main", "init", "-q"], seed);
+    git(["config", "user.name", "Yukl Test"], seed);
+    git(["config", "user.email", "yukl-test@example.com"], seed);
+    writeTreeFile(seed, "README.md", "x");
+    commitAll(seed, "seed");
+    git(["remote", "add", "origin", remote], seed);
+    git(["push", "-q", "origin", "main"], seed);
+    const pushedSha = git(["rev-parse", "HEAD"], seed).stdout.trim();
+
+    // A clone of that remote with one extra, unpushed commit.
+    const clone = join(dir, "clone");
+    git(["clone", "-q", remote, clone], dir);
+    git(["config", "user.name", "Yukl Test"], clone);
+    git(["config", "user.email", "yukl-test@example.com"], clone);
+    writeTreeFile(clone, "unpushed.txt", "x");
+    commitAll(clone, "unpushed");
+    const unpushedSha = git(["rev-parse", "HEAD"], clone).stdout.trim();
+    assert.notEqual(unpushedSha, pushedSha);
+
+    const checker = (pin) => pinReachableOnOrigin(pin, clone);
+    assert.equal(checker(unpushedSha), false, "an unpushed commit must be unreachable");
+    assert.equal(checker(pushedSha), true, "a pushed commit must be reachable");
+
+    await withFixtureRepo(async (fixture) => {
+      writeTreeFile(fixture, "package.json", JSON.stringify({ scripts: { test: "node t.js" } }));
+      commitAll(fixture, "base");
+      git(["checkout", "-q", "-b", "feature"], fixture);
+
+      const refused = runInit({ cwd: fixture, yuklPin: unpushedSha, checkPinReachable: checker });
+      assert.equal(refused.ok, false, "an unpushed pin must refuse (exit 1 via the CLI)");
+      assert.match(
+        refused.error,
+        new RegExp(`pin ${unpushedSha} is not pushed; push it or pass --yukl-pin <pushed sha>`),
+      );
+      assert.deepEqual(refused.writes, []);
+      assertNoInitWrites(fixture);
+
+      const allowed = runInit({ cwd: fixture, yuklPin: pushedSha, checkPinReachable: checker });
+      assert.equal(allowed.ok, true, allowed.error);
+      const workflow = readFileSync(join(fixture, ".github/workflows/yukl.yml"), "utf8");
+      assert.ok(workflow.includes(`yukl-os#${pushedSha}`), "CI must pin the pushed SHA");
+    });
   });
 });
 
