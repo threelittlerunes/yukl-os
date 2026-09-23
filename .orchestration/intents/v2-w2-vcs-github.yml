@@ -1,0 +1,35 @@
+intent:
+  goal: "Add the GitHub VCS adapter that opens and merges pull requests with a run-head trailer."
+  depends_on:
+    - "v2-w1-runtime"
+  scope:
+    allowed_paths:
+      - "scripts/adapters/vcs-github.js"
+      - "tests/adapter-vcs-github.test.js"
+      - "tests/fixtures/fake-gh/**"
+      - ".orchestration/contracts/v2-w2-vcs-github.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
