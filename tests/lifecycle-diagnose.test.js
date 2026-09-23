@@ -18,6 +18,16 @@ function diagnosisOf(category, observation = {}) {
   return { stage: "prove", category, observation };
 }
 
+/** An attempt record, as the engine would store it from a decision. */
+function record(decision) {
+  return {
+    stage: decision.stage,
+    category: decision.category,
+    intervention: decision.intervention,
+    inputHash: decision.inputHash,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // classify: one category per observation
 // ---------------------------------------------------------------------------
@@ -69,16 +79,27 @@ test("classify applies one fixed precedence order when signals overlap", () => {
   assert.equal(classify({ stage: "prove", failingRules: ["R-A"] }), "unclassified");
 });
 
-test("classify promotes a repeated failure for the stage to repeated_violation", () => {
-  const history = [{ stage: "prove", category: "implementation_defect" }];
-  assert.equal(classify({ stage: "prove", proofFailed: true }, history), "repeated_violation");
+test("classify promotes only a repeated path violation", () => {
+  const pathHistory = [{ stage: "prove", category: "path_violation" }];
+  assert.equal(
+    classify({ stage: "prove", pathViolations: ["src/a.js"] }, pathHistory),
+    "repeated_violation",
+  );
+
+  const defectHistory = [{ stage: "prove", category: "implementation_defect" }];
+  assert.equal(
+    classify({ stage: "prove", proofFailed: true }, defectHistory),
+    "implementation_defect",
+  );
 });
 
 test("classify does not promote a different category or a different stage", () => {
-  const history = [{ stage: "prove", category: "implementation_defect" }];
-  assert.equal(classify({ stage: "prove", timedOut: true }, history), "capability_limit");
-  assert.equal(classify({ stage: "audit", proofFailed: true }, history), "implementation_defect");
-  assert.equal(classify({ stage: "prove", proofFailed: true }, []), "implementation_defect");
+  const history = [{ stage: "prove", category: "path_violation" }];
+  assert.equal(
+    classify({ stage: "audit", pathViolations: ["src/a.js"] }, history),
+    "path_violation",
+  );
+  assert.equal(classify({ stage: "prove", pathViolations: ["src/a.js"] }, []), "path_violation");
 });
 
 // ---------------------------------------------------------------------------
@@ -124,6 +145,58 @@ test("an adaptive decision carries inputs and hashes them, not the observation a
   assert.ok(decision.rationale.length > 0);
   assert.equal(decision.inputHash, hashInputs(decision.inputs));
   assert.equal(decision.attempt, 1);
+});
+
+// ---------------------------------------------------------------------------
+// tactic-specific inputs
+// ---------------------------------------------------------------------------
+
+test("each tactic hashes its own inputs", () => {
+  const observation = {
+    stage: "prove",
+    proofFailed: true,
+    exitCode: 1,
+    output: "boom",
+    runtime: "alpha",
+  };
+  const first = chooseIntervention(diagnosisOf("implementation_defect", observation), [], POLICY);
+  assert.equal(first.intervention, "retry");
+  assert.equal(first.inputs.tactic, "rational persuasion");
+  assert.deepEqual(first.inputs.failingOutput, {
+    exitCode: 1,
+    proofFailed: true,
+    output: "boom",
+  });
+
+  const second = chooseIntervention(
+    diagnosisOf("implementation_defect", observation),
+    [record(first)],
+    POLICY,
+  );
+  assert.equal(second.intervention, "apprising");
+  assert.equal(second.inputs.tactic, "apprising");
+  assert.equal(second.inputs.context.previousFailure, "implementation_defect");
+  assert.notDeepEqual(second.inputs, first.inputs);
+
+  const third = chooseIntervention(
+    diagnosisOf("implementation_defect", observation),
+    [record(first), record(second)],
+    POLICY,
+  );
+  assert.equal(third.intervention, "collaboration");
+  assert.equal(third.inputs.tactic, "collaboration");
+  assert.deepEqual(third.inputs.runtimeSwitch, { from: "alpha", to: null });
+  assert.notDeepEqual(third.inputs, second.inputs);
+});
+
+test("a runtime move carries the runtime switch", () => {
+  const decision = chooseIntervention(
+    diagnosisOf("capability_limit", { timedOut: true, runtime: "alpha", nextRuntime: "beta" }),
+    [],
+    POLICY,
+  );
+  assert.equal(decision.intervention, "switch_runtime");
+  assert.deepEqual(decision.inputs.runtimeSwitch, { from: "alpha", to: "beta" });
 });
 
 // ---------------------------------------------------------------------------
@@ -192,6 +265,32 @@ test("chooseIntervention walks the table and escalates when it is exhausted", ()
   assert.equal(decision.kind, "deterministic");
   assert.equal(decision.rule, RULES.TABLE_EXHAUSTED);
   assert.equal(decision.intervention, "escalate");
+});
+
+test("two consecutive implementation_defect failures get different interventions", () => {
+  const observation = { stage: "prove", proofFailed: true, output: "boom" };
+  const first = diagnose(observation, [], POLICY);
+  assert.equal(first.category, "implementation_defect");
+  assert.equal(first.intervention, "retry");
+  assert.equal(first.tactic, "rational persuasion");
+
+  const second = diagnose(observation, [record(first)], POLICY);
+  assert.equal(second.category, "implementation_defect");
+  assert.equal(second.kind, "adaptive");
+  assert.equal(second.intervention, "apprising");
+  assert.notEqual(second.intervention, first.intervention);
+  assert.notEqual(second.inputHash, first.inputHash);
+
+  const atLimit = [0, 1, 2].map((i) => ({
+    stage: "prove",
+    category: "implementation_defect",
+    intervention: `tried-${i}`,
+    inputHash: `h${i}`,
+  }));
+  const limited = diagnose(observation, atLimit, POLICY);
+  assert.equal(limited.kind, "deterministic");
+  assert.equal(limited.rule, RULES.ATTEMPT_LIMIT);
+  assert.equal(limited.intervention, "escalate");
 });
 
 // ---------------------------------------------------------------------------
@@ -268,12 +367,23 @@ test("diagnose classifies and chooses in one step", () => {
   assert.equal(assertDecision(decision), decision);
 });
 
-test("diagnose stops a repeated failure with enforcement", () => {
-  const history = [{ stage: "prove", category: "implementation_defect" }];
-  const decision = diagnose({ stage: "prove", proofFailed: true }, history, POLICY);
+test("diagnose stops a repeated path violation with enforcement", () => {
+  const history = [{ stage: "prove", category: "path_violation" }];
+  const decision = diagnose({ stage: "prove", pathViolations: ["src/a.js"] }, history, POLICY);
   assert.equal(decision.kind, "deterministic");
   assert.equal(decision.rule, RULES.REPEAT_VIOLATION);
   assert.equal(decision.intervention, "enforcement");
+});
+
+test("chooseIntervention classifies a diagnosis without a category, with history", () => {
+  const history = [{ stage: "prove", category: "path_violation" }];
+  const decision = chooseIntervention(
+    { stage: "prove", observation: { pathViolations: ["src/a.js"] } },
+    history,
+    POLICY,
+  );
+  assert.equal(decision.category, "repeated_violation");
+  assert.equal(decision.rule, RULES.REPEAT_VIOLATION);
 });
 
 // ---------------------------------------------------------------------------
