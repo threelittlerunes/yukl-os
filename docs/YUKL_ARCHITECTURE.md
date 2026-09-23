@@ -218,3 +218,82 @@ PR onwards.
 
 `npm run build` validates the `yukl.config.json` schema and every intent file
 in `.orchestration/intents/`, alongside the repo-only governance checks.
+
+### 3.6 Installing the harness: `yukl init`
+
+`yukl init [--cwd <dir>] [--force] [--yukl-pin <sha>] [--project-dir <rel>]...
+[--command <key>=<cmd>]...` installs the harness into a target repository on a
+feature branch, never overwriting anything the repository already has.
+Refusals (exit 1, nothing written) are decided before any write: not a Git
+repository (task e's `.git`-or-colocated rule), HEAD on the default branch, a
+detached HEAD, or a dirty working tree. **Colocated Jujutsu** is the
+exception: jj keeps git HEAD detached by design, so there the detached-HEAD
+refusal is replaced by refusing only while the working-copy commit (`@`) is
+still the default branch's tip - the jj analogue of "on the default branch",
+because jj bookmarks follow `@` and edits made on the tip would advance the
+default branch itself.
+
+Project files are read from the repository root and, via `--project-dir`, from
+named subdirectories; when the root has neither `package.json` nor
+`pyproject.toml`, directories exactly one level below the root are scanned and
+any holding one of those files is auto-detected with a warning (the pathfinder
+layout: Python under `app/`). Commands for a subdirectory project carry a
+`cd <dir> && ` prefix because `verify` executes allowlisted commands from the
+repo root; the generated CI is Linux-only (`ubuntu-latest`, sh), and `cd X &&
+CMD` is equally valid in sh, cmd and PowerShell, so the same command runs
+locally on Windows.
+
+Init writes four kinds of files:
+
+- **`yukl.config.json`** - detected commands only: `package.json` scripts map
+  to `npm run build|test|format|lint`, and a **line-based scan** of
+  `pyproject.toml` records `ruff check` (`python -m ruff check` in a
+  subdirectory) for a `[tool.ruff]` header and `pytest` (`python -m pytest`)
+  for a `[tool.pytest...]` header. The scan is not a TOML parse: headers must
+  start at column 0 and no other tools are detected. Anything undetected is
+  written as `null` with a warning, never guessed; `--command <key>=<cmd>`
+  supplies or overrides commands, and init refuses outright when the resulting
+  allowlist would be empty (an empty allowlist would fail the config schema).
+  An existing config is left alone unless `--force` is passed.
+- **Agent docs** - any existing `CLAUDE.md`, `AGENTS.md` or `GEMINI.md` gains
+  a section between `<!-- yukl:begin -->` and `<!-- yukl:end -->` markers;
+  everything outside the markers is preserved byte for byte and a second run
+  replaces only the marked section (idempotency). Missing docs are skipped
+  with a warning rather than created.
+- **CI** - `.github/workflows/yukl.yml` sets up Node (to run yukl) and, when a
+  Python command was detected, Python. It installs the Python project with its
+  dev extras (`pip install -e "app[dev]"`) when `pyproject.toml` declares a
+  `dev` or `test` extra under `[project.optional-dependencies]`; otherwise it
+  installs the detected tools (`pip install ruff pytest`) and warns. It runs
+  the detected checks - each line in its own subshell, so a `cd <dir> && `
+  prefix cannot leak into the next line - and gates the PR on
+  `yukl verify --base origin/<base_ref>`. The yukl it runs is
+  **commit-pinned**: `npm exec --package=github:threelittlerunes/yukl-os#<sha>`
+  with the SHA taken from `--yukl-pin` or detected from the harness checkout -
+  never a floating ref. **The pin must be at or after the task h merge**: the
+  verify step captures yukl's output and exit status and, when the output
+  contains no check line (no line starting with `PASS` or `FAIL`), prints
+  "yukl produced no output; the pinned version `<sha>` cannot run via the npm
+  bin shim, so pin a release that includes task h" and exits 1 - a yukl-os
+  commit from before the task h bin-shim fix exits 0 silently through npm's
+  `.bin` shim, and without the guard the gate would pass every PR. A failing
+  verify still surfaces its output (`set +e` around the capture) and the step
+  exits with verify's status. Before writing, init verifies the pin is
+  actually pushed to the yukl-os remote (local remote-tracking branches first,
+  `git ls-remote` as fallback): an unpushed pin refuses with "pin `<sha>` is
+  not pushed; push it or pass `--yukl-pin <pushed sha>`". The check fails
+  closed offline; `YUKL_PIN_CHECK=off` skips it with a warning.
+- **Orchestration dirs** - a `.gitkeep` placeholder inside each of
+  `.orchestration/contracts/` and `.orchestration/intents/` so the empty
+  directories are trackable in Git.
+
+The first init PR is bootstrapped by human review: the generated CI first
+checks `git cat-file -e origin/<base_ref>:yukl.config.json`; when the base has
+no config, the job prints "bootstrap: harness not installed at base; this PR
+is gated by human review" and exits 0, and `verify` starts enforcing from the
+next PR on.
+
+`scripts/yukl.js` decides whether it is the CLI entry point by comparing the
+realpaths of `import.meta.url` and `process.argv[1]`, which works through
+npm's `.bin` shim (a symlink on Linux, a `.cmd` wrapper on Windows) and still
+refuses to run when the module is imported by the test runner.

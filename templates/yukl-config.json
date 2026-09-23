@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "commands": {
+    "build": null,
+    "test": null,
+    "format": null,
+    "lint": null,
+    "python_check": null,
+    "python_test": null
+  },
+  "folders": {
+    "contracts": ".orchestration/contracts",
+    "intents": ".orchestration/intents",
+    "locks": ".orchestration/locks",
+    "artifacts": ".orchestration/artifacts"
+  },
+  "allowlist": []
+}

@@ -43,11 +43,29 @@ npm run test    # instruction-budget check + test suite
 
 Node 20 or newer is required.
 
-**2. Drop the pipeline into your project.**
+**2. Install the harness into your project.**
 
 ```sh
-cp flow.config.json /path/to/your-project/flow.config.json
+node scripts/yukl.js init --cwd /path/to/your-project
 ```
+
+From a feature branch of a Git repository (a clean tree, not the default
+branch, not detached), `yukl init` writes `yukl.config.json` with the commands
+it detects from `package.json` and `pyproject.toml` (undetected commands are
+`null`, never guessed), appends a marked section to any existing `CLAUDE.md`,
+`AGENTS.md` or `GEMINI.md`, and installs a CI workflow at
+`.github/workflows/yukl.yml` that gates PRs on `yukl verify --base` running a
+commit-pinned harness. Subdirectory projects are handled with
+`--project-dir app` (auto-detected one level below the root when the root has
+no project file), and `--command test=<cmd>` supplies a proof command when
+none is detectable; without at least one proof command init refuses rather
+than write an invalid config. The harness commit the CI runs must already be
+pushed to the yukl-os remote, so push first or pass `--yukl-pin <sha>` - and
+the pin must be at or after the task h merge, because the generated CI gate
+fails closed when the pinned yukl produces no output (older yukl-os versions
+exit 0 silently through the npm bin shim).
+Re-run init after a merge to update the generated files, passing `--force` to
+overwrite an existing config; everything else is left alone.
 
 **3. Declare your intent, then run the pipeline from Orca.**
 
