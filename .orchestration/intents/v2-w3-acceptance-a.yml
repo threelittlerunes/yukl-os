@@ -1,0 +1,37 @@
+intent:
+  goal: "Add hermetic acceptance tests for AC1, AC2 and AC4."
+  depends_on:
+    - "v2-w2-engine"
+    - "v2-w1-enforce"
+    - "v2-w2-vcs-git-local"
+    - "v2-w1-stages"
+  scope:
+    allowed_paths:
+      - "tests/acceptance-a.test.js"
+      - "tests/fixtures/acceptance-a/**"
+      - ".orchestration/contracts/v2-w3-acceptance-a.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
