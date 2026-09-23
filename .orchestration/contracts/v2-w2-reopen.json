@@ -1,0 +1,12 @@
+{
+  "task_id": "v2-w2-reopen",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w2-reopen.json",
+    "scripts/lifecycle/reopen.js",
+    "tests/lifecycle-reopen.test.js"
+  ]
+}
