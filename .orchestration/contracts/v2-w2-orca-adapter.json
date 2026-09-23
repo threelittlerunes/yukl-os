@@ -1,0 +1,13 @@
+{
+  "task_id": "v2-w2-orca-adapter",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w2-orca-adapter.json",
+    "scripts/adapters/orca.js",
+    "tests/adapter-orca.test.js",
+    "tests/fixtures/fake-orca/fake-orca.js"
+  ]
+}
