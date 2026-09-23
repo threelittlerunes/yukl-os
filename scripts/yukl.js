@@ -1191,15 +1191,17 @@ export function pinReachableOnOrigin(pin) {
   const contains = spawnSync("git", ["branch", "-r", "--contains", pin], {
     cwd: PACKAGE_ROOT,
     encoding: "utf8",
+    timeout: 30000,
   });
   if (contains.status === 0 && contains.stdout.trim() !== "") return true;
   const url = spawnSync("git", ["remote", "get-url", "origin"], {
     cwd: PACKAGE_ROOT,
     encoding: "utf8",
+    timeout: 30000,
   });
   const originUrl =
     url.status === 0 ? url.stdout.trim() : "https://github.com/threelittlerunes/yukl-os.git";
-  const ls = spawnSync("git", ["ls-remote", originUrl], { encoding: "utf8" });
+  const ls = spawnSync("git", ["ls-remote", originUrl], { encoding: "utf8", timeout: 60000 });
   if (ls.status !== 0) return false;
   return ls.stdout
     .split(/\r?\n/)
