@@ -1,0 +1,37 @@
+intent:
+  goal: "Opt the docs in to doc-status and document run, status, decide, policy and state."
+  depends_on:
+    - "v2-w3-run-command"
+    - "v2-w3-status-command"
+    - "v2-w3-acceptance-a"
+    - "v2-w3-acceptance-b"
+    - "task-i-doc-corrections"
+  scope:
+    allowed_paths:
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "docs/SDLC_PLAN.md"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - "flow.config.json"
+      - ".orchestration/contracts/v2-w4-docs.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
