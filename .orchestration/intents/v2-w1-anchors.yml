@@ -1,0 +1,35 @@
+intent:
+  goal: "Resolve committed artefact anchors and ancestry against a git ref."
+  depends_on:
+    - "v2-w0-test-runner"
+    - "v2-w0-cli-seams"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/anchors.js"
+      - "tests/lifecycle-anchors.test.js"
+      - ".orchestration/contracts/v2-w1-anchors.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false

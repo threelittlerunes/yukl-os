@@ -1,0 +1,36 @@
+intent:
+  goal: "Add yukl.policy.json with its loader and validator, read from the base ref."
+  depends_on:
+    - "v2-w0-test-runner"
+    - "v2-w0-cli-seams"
+  scope:
+    allowed_paths:
+      - "yukl.policy.json"
+      - "scripts/lifecycle/policy.js"
+      - "scripts/validators/policy.js"
+      - "tests/lifecycle-policy.test.js"
+      - ".orchestration/contracts/v2-w1-policy.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: true
