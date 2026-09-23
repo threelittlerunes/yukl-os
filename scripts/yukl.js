@@ -3,12 +3,15 @@
 //
 //   yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]
 //   yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]
+//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]
 //   yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]
 //
 // The binding layer is deterministic checks, not prompts. `render` expands a
 // pipeline stage spec for any agent runtime (Claude Code, OpenCode, Antigravity,
 // Orca or none); `verify` enforces the Rational Persuasion contract and is
-// designed to be the merge gate a CI job runs on pull requests; `init`
+// designed to be the merge gate a CI job runs on pull requests; `vcs-sync`
+// publishes a colocated Jujutsu working copy into Git (`syncJjWorkingCopy`)
+// before a Git-only dispatcher branches a worker from a stale tip; `init`
 // installs the harness into a target repository on a feature branch without
 // overwriting anything the repository already has.
 //
@@ -1158,6 +1161,192 @@ export function jjWorkingCopyOnDefaultBranch(cwd, defaultBranch) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Jujutsu working-copy publication
+// ---------------------------------------------------------------------------
+
+/** The Git branch `yukl vcs-sync` publishes the Jujutsu working copy under. */
+export const JJ_WC_BOOKMARK = "yukl-wc";
+
+/** The message given to a working-copy commit that has no description yet. */
+export const JJ_WC_MESSAGE = "yukl vcs-sync: publish the Jujutsu working copy";
+
+const JJ_BOOKMARK_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+/**
+ * True when `name` is shaped like a Git branch Jujutsu will accept as a
+ * bookmark name: a leading alphanumeric run, then alphanumerics and `._/-`,
+ * with no `..`, no trailing `/` and no `.lock` suffix. Purely syntactic; the
+ * real refusal is still jj's own. Kept here so the CLI can report a usage
+ * error (exit 2) before jj is spawned at all.
+ */
+export function isJjBookmarkName(name) {
+  return (
+    typeof name === "string" &&
+    JJ_BOOKMARK_RE.test(name) &&
+    !name.includes("..") &&
+    !name.endsWith("/") &&
+    !name.endsWith(".lock")
+  );
+}
+
+/**
+ * Locate the Jujutsu workspace containing `cwd`. Returns `{ root, error }`.
+ * jj answers this itself: it is run *in* `cwd`, where `jj root` walks up the
+ * directory tree, so a subdirectory and the workspace root resolve alike (jj's
+ * `--repository` flag does not walk up, only an exact workspace root). A plain
+ * Git repository is `{ root: null, error: null }` rather than a throw: the
+ * harness has to run in Git repositories that know nothing about Jujutsu.
+ * `error` is set only when a workspace is unmistakably there - `.jj` in `cwd` -
+ * and jj cannot be run at all, which must fail closed instead of passing as
+ * "nothing to publish".
+ */
+export function jjWorkspaceRoot(cwd) {
+  const result = spawnSync("jj", ["root"], { cwd, encoding: "utf8" });
+  if (result.error) {
+    if (!existsSync(join(cwd, ".jj"))) return { root: null, error: null };
+    return {
+      root: null,
+      error: `.jj is present in ${cwd} but jj could not be run: ${result.error.message}`,
+    };
+  }
+  if (result.status !== 0) return { root: null, error: null };
+  const root = (result.stdout || "").trim();
+  return { root: root === "" ? null : root, error: null };
+}
+
+/** The commit id `revset` resolves to in the workspace at `root`, or null. */
+function jjCommitId(root, revset) {
+  const result = spawnSync(
+    "jj",
+    ["--repository", root, "log", "-r", revset, "--no-graph", "-T", "commit_id"],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) return null;
+  const id = (result.stdout || "").trim();
+  return /^[0-9a-f]{40}$/.test(id) ? id : null;
+}
+
+/** The working-copy commit's description at `root`, or null when unreadable. */
+function jjDescription(root) {
+  const result = spawnSync(
+    "jj",
+    ["--repository", root, "log", "-r", "@", "--no-graph", "-T", "description"],
+    { encoding: "utf8" },
+  );
+  return result.status === 0 ? (result.stdout || "").trim() : null;
+}
+
+/** The last non-empty line of a failed command's output, for a one-line error. */
+function failedLine(result) {
+  const lines = `${result.stderr || ""}${result.stdout || ""}`
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "");
+  return lines.length === 0 ? `exit ${result.status}` : lines[lines.length - 1];
+}
+
+/**
+ * Publish the Jujutsu working-copy commit (`@`) as the Git ref
+ * `refs/heads/<bookmark>`, and prove the ref really names it.
+ *
+ * Jujutsu snapshots the working copy into `@` on every command, so `@` always
+ * holds the uncommitted state - but in a colocated workspace that commit is
+ * reachable only through Jujutsu's own bookmark machinery, and a Git-only
+ * consumer (Orca branching a worker's worktree from a branch tip) never sees
+ * it. This function closes that gap: describe `@` when it still has no
+ * description, move the bookmark onto it (`--allow-backwards`, so the ref
+ * tracks `@` in both directions), let Jujutsu export bookmarks into Git, and
+ * then check with Git itself that the ref resolves to exactly the `@` commit
+ * id. Only that last check makes a sync successful.
+ *
+ * Returns `{ ok: true, synced: false, reason }` when `cwd` holds no Jujutsu
+ * workspace (nothing to publish, and not an error), `{ ok: false, error }`
+ * when a workspace exists but cannot be published, or
+ * `{ ok: true, synced: true, jjRoot, bookmark, ref, commit, described, moved }`.
+ * Files Jujutsu ignores are not part of the snapshot, exactly as they are not
+ * part of the working copy it tracks.
+ */
+export function syncJjWorkingCopy({
+  cwd = process.cwd(),
+  bookmark = JJ_WC_BOOKMARK,
+  message = JJ_WC_MESSAGE,
+} = {}) {
+  if (!isJjBookmarkName(bookmark)) {
+    return { ok: false, error: `"${bookmark}" is not a valid Jujutsu bookmark name` };
+  }
+  const { root, error: locateError } = jjWorkspaceRoot(cwd);
+  if (locateError !== null) return { ok: false, error: locateError };
+  if (root === null) {
+    return { ok: true, synced: false, reason: "no Jujutsu workspace" };
+  }
+  const vcsError = vcsViolation(root);
+  if (vcsError !== null) return { ok: false, error: vcsError };
+
+  // Read the published ref before jj runs at all: jj snapshots the working copy
+  // into the commit inside its own commands, so a later read would already
+  // report the state this sync produces and could never see a move.
+  const ref = `refs/heads/${bookmark}`;
+  const before = git(["rev-parse", "--verify", "--quiet", ref], root);
+  const wasAt = before.status === 0 ? (before.stdout || "").trim() : null;
+
+  const description = jjDescription(root);
+  if (description === null) {
+    return { ok: false, error: `cannot read the working-copy description in ${root}` };
+  }
+  let described = false;
+  if (description === "") {
+    const describe = spawnSync("jj", ["--repository", root, "describe", "-m", message], {
+      encoding: "utf8",
+    });
+    if (describe.status !== 0) {
+      return { ok: false, error: `jj describe failed: ${failedLine(describe)}` };
+    }
+    described = true;
+  }
+
+  // describe rewrites the working-copy commit, so its id is read afterwards.
+  const commit = jjCommitId(root, "@");
+  if (commit === null) {
+    return { ok: false, error: `cannot resolve the Jujutsu working copy (@) in ${root}` };
+  }
+
+  const set = spawnSync(
+    "jj",
+    ["--repository", root, "bookmark", "set", "--allow-backwards", bookmark, "-r", "@"],
+    { encoding: "utf8" },
+  );
+  if (set.status !== 0) {
+    return { ok: false, error: `jj bookmark set ${bookmark} failed: ${failedLine(set)}` };
+  }
+  const exported = spawnSync("jj", ["--repository", root, "git", "export"], { encoding: "utf8" });
+  if (exported.status !== 0) {
+    return { ok: false, error: `jj git export failed: ${failedLine(exported)}` };
+  }
+
+  // Proof, not faith: Git must resolve the ref to the working-copy commit.
+  const published = git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], root);
+  const at = published.status === 0 ? (published.stdout || "").trim() : "";
+  if (at !== commit) {
+    const found = at === "" ? "nothing" : at.slice(0, 12);
+    return {
+      ok: false,
+      error:
+        `${ref} resolves to ${found} but the Jujutsu working copy is ${commit.slice(0, 12)}: ` +
+        "the working copy was not published",
+    };
+  }
+  return {
+    ok: true,
+    synced: true,
+    jjRoot: root,
+    bookmark,
+    ref,
+    commit,
+    described,
+    moved: wasAt !== commit,
+  };
+}
+
 /**
  * Resolve the pinned yukl commit the generated CI workflow must run.
  * A CI gate that runs a floating ref can be made to run anything by anyone
@@ -1555,6 +1744,7 @@ const USAGE = [
   "usage:",
   "  yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]",
   "  yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]",
+  "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]",
   "  yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]",
   "            [--project-dir <rel>]... [--command <key>=<cmd>]...",
 ].join("\n");
