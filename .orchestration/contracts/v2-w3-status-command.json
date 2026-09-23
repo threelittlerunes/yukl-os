@@ -1,0 +1,12 @@
+{
+  "task_id": "v2-w3-status-command",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w3-status-command.json",
+    "scripts/commands/status.js",
+    "tests/command-status.test.js"
+  ]
+}
