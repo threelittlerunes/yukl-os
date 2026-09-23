@@ -1,0 +1,15 @@
+{
+  "task_id": "task-i-doc-corrections",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/task-i-doc-corrections.json",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "README.md",
+    "docs/YUKL_ARCHITECTURE.md"
+  ]
+}

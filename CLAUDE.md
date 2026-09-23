@@ -26,4 +26,4 @@ Provide:
 - Test: `npm run test`
 - Format: `npx @biomejs/biome format --write .`
 
-Failure to adhere triggers Coercive Power (process termination and `git worktree remove`).
+Failure to adhere would trigger process termination and `git worktree remove`; this enforcement loop is planned, not yet implemented.
