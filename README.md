@@ -1,3 +1,4 @@
+<!-- yukl:doc-status -->
 # Yukl-OS: The Power-Based Agent Harness
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -9,14 +10,29 @@
 Yukl-OS maps French & Raven's bases of power and Yukl's influence tactics onto deterministic pipeline constraints, so an AI workforce is bounded by architecture rather than by good intentions in a prompt.
 
 ## Key features
+<!-- status: background -->
 
-- **Cognitive budget enforcement** - instruction counts are measured and capped, so "too much context" fails the build instead of degrading silently.
-- **Power-based role isolation** - each agent holds a defined base of power (Legitimate, Expert), not a vague "be a senior developer" persona.
-- **Empirical proof contracts** - an agent cannot finish a task without writing executable proof to `.orchestration/contracts/<task_id>.json`.
-- **Coercive retry loops** - planned: a failed audit would route the work deterministically back to implementation, up to `maxRetries`, with no human hope required.
-- **Path-scoped progressive disclosure** - an agent receives only the rule files matching the paths it is allowed to touch.
+### Cognitive budget enforcement
+<!-- status: implemented tests=tests/rules.test.js#every rule file stays inside its instruction budget (AF-4) -->
+Instruction counts are measured and capped, so "too much context" fails the build instead of degrading silently.
+
+### Empirical proof contracts
+<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
+An agent cannot finish a task without writing executable proof to `.orchestration/contracts/<task_id>.json`, which `yukl verify` executes before a merge.
+
+### Path-scoped progressive disclosure
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md section 2 routes every rule file (V-1) -->
+An agent receives only the rule files matching the paths it is allowed to touch, and the build checks that the root router points at every rule file.
+
+## Planned features
+<!-- status: planned -->
+
+- **Coercive retry loops** - a failed audit would route the work deterministically back to implementation, up to `maxRetries`. The intervention table and the stage machine exist; the process kill and worktree removal do not.
+- **Run budgets and unattended runs** - `yukl.policy.json` declares wall-clock, token and agent-start budgets, but nothing enforces them yet, so `yukl run --unattended` is refused while they are null.
+- **The Phase 5 feedback loop** - see [docs/SDLC_PLAN.md](docs/SDLC_PLAN.md).
 
 ## Pipeline
+<!-- status: background -->
 
 ```mermaid
 flowchart LR
@@ -30,6 +46,7 @@ flowchart LR
 ```
 
 ## Quick Start
+<!-- status: implemented tests=tests/init.test.js#init a node-only repo: detected commands, null for the rest, checkout-sha pin -->
 
 **1. Install and verify the harness.**
 
@@ -67,15 +84,42 @@ exit 0 silently through the npm bin shim).
 Re-run init after a merge to update the generated files, passing `--force` to
 overwrite an existing config; everything else is left alone.
 
-**3. Declare your intent, then run the pipeline from Orca.**
+**3. Declare your intent, then drive the lifecycle.**
 
 ```sh
 cp INTENT.md /path/to/your-project/INTENT.md
 ```
 
-Edit `INTENT.md` with a one or two sentence objective. When you start the flow, the interactive Legitimate Power stage reads it and interviews you in the terminal to lock the scope before any code is written.
+Edit `INTENT.md` with a one or two sentence objective, then run the task with
+`yukl run <task_id>` from the repository root. The lifecycle commands are
+described below.
+
+## Lifecycle commands
+<!-- status: implemented tests=tests/acceptance-a.test.js#AC1: the merged lifecycle anchors every event to the base and commits the run head -->
+
+The v2 runtime drives one task through a fixed lifecycle and records every step
+in a hash-chained log:
+
+- `yukl run <task_id> [--unattended] [--once]` composes the event log, the
+  stage machine, the autonomy policy, path enforcement, failure diagnosis and
+  the runtime and VCS adapters named in the `lifecycle` block of
+  `yukl.config.json`, then loops until the task blocks, needs a human,
+  escalates or finishes. `--once` takes a single step.
+- `yukl status <task_id> [--state-dir <dir>] [--base <ref>]` folds the log to
+  its state, prints the last decision, verifies the hash chain and checks the
+  log against the newest `Yukl-Run-Head` trailer on the base branch.
+- `yukl decide <pause|resume|override|stop|approve> --task <id> --by <name>
+  --reason <text>` records a human decision; it is refused while
+  `YUKL_DISPATCH_ID` is set, so a dispatched agent cannot impersonate the
+  human.
+
+Which transitions may advance without a human is set by `yukl.policy.json`, and
+the per-task state lives under `.orchestration/state/` (git-ignored). The full
+contract, including the known limits of these guarantees, is in section 4 of
+[docs/YUKL_ARCHITECTURE.md](docs/YUKL_ARCHITECTURE.md).
 
 ## How It Works
+<!-- status: background -->
 
 ```mermaid
 flowchart TD
@@ -125,17 +169,21 @@ French & Raven (1959) describe the sources of power; Yukl & Falbe (1990) describ
 Two non-mappings are deliberate. **Referent power** (influence through admiration) is a human social mechanism with no meaningful agent equivalent, so the harness does not claim it. **Reward power** is a known gap, recorded in section 3.2 of the architecture document.
 
 ## Agent support
+<!-- status: background -->
 
 The harness is agent-agnostic. `CLAUDE.md` carries the constitution for Claude Code, and `AGENTS.md` carries the same rules for agents that read AGENTS.md. Whichever agent writes the code, the deterministic checks - `npm run build`, `npm run test` and CI - are the binding layer that verifies it.
 
 ## Architecture
+<!-- status: background -->
 
 The harness treats the repository as a constitution and the pipeline as its enforcement. A router stage establishes the scope, a Drafter implements inside an isolated worktree, and an Auditor executes the Drafter's empirical proof before approving the work. Instruction budgets, path-scoped rules and advisory locks keep every agent inside its lane. The full rationale, the 12-Factor Agents gap analysis and the known capability gaps live in [docs/YUKL_ARCHITECTURE.md](docs/YUKL_ARCHITECTURE.md).
 
 ## Contributing
+<!-- status: background -->
 
 Contributions are held to the standard the harness enforces: small scope, empirical proof, no vibes. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution contract, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for participation. Report vulnerabilities per [SECURITY.md](SECURITY.md), not in a public issue.
 
 ## Licence
+<!-- status: background -->
 
 MIT - see [LICENSE](LICENSE).

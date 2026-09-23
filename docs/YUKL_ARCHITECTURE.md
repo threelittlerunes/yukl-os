@@ -1,3 +1,4 @@
+<!-- yukl:doc-status -->
 # Yukl Power Harness: Agentic SDLC Architecture
 
 **Version:** 2.0 (Advanced Configuration)
@@ -6,6 +7,7 @@
 ---
 
 ## 1. The Core Problem: Cognitive Dilution & Anthropomorphism
+<!-- status: implemented tests=tests/rules.test.js#every rule file stays inside its instruction budget (AF-4) -->
 The primary failure mode of Agentic SDLCs is not capability, but **Context Dilution**. Frontier models suffer a probabilistic collapse in instruction adherence when system prompts exceed roughly 150 concurrent instructions. When a "vibecoder" stuffs testing conventions, database schemas, and architectural guidelines into a single `CLAUDE.md`, the model's attention mechanism degrades. It begins to ignore critical security constraints just as frequently as it ignores minor styling preferences.
 
 This claim is measured, not asserted. `scripts/count-instructions.js` counts the directives injected by the root file and every path-scoped rule, and `npm test` fails when any file - or the system as a whole - exceeds its budget.
@@ -13,10 +15,12 @@ This claim is measured, not asserted. `scripts/count-instructions.js` counts the
 Furthermore, assigning generic, monolithic roles to agents ("Be a senior developer") fails to establish the organizational friction required for robust software engineering.
 
 ## 2. Two Frameworks: Bases of Power and Influence Tactics
+<!-- status: background -->
 
 The harness draws on **two distinct** organisational-psychology frameworks. They are frequently conflated, so this document keeps them separate throughout.
 
 ### 2.1 French & Raven: Bases of Power
+<!-- status: background -->
 French & Raven (1959) describe the *sources* of an agent's power - where the ability to influence comes from.
 
 | Base | Source of influence |
@@ -31,6 +35,7 @@ French & Raven (1959) describe the *sources* of an agent's power - where the abi
 The original paper described five bases; informational power was added later by Raven, giving the commonly cited set of six.
 
 ### 2.2 Yukl: Proactive Influence Tactics
+<!-- status: background -->
 Yukl & Falbe (1990) describe *how* influence is attempted - the observable behaviours, of which there are **eleven** proactive tactics.
 
 | # | Tactic | # | Tactic |
@@ -45,6 +50,7 @@ Yukl & Falbe (1990) describe *how* influence is attempted - the observable behav
 Neither framework has twelve of anything: French & Raven give six bases, Yukl gives eleven tactics. References to "12 bases" are incorrect.
 
 ### 2.3 Mapping the Harness onto Both Frameworks
+<!-- status: background -->
 
 | Harness mechanism | Framework | Concept |
 |---|---|---|
@@ -60,10 +66,12 @@ Neither framework has twelve of anything: French & Raven give six bases, Yukl gi
 Two deliberate non-mappings are worth recording. **Referent power** - influence through admiration or identification - is a human social mechanism with no meaningful agent equivalent; the harness does not claim it. **Reward power** is listed as a known gap in section 3.2.
 
 ### 2.4 Legitimate Power (The 60-Line Root Imperative)
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md stays under the 60-line root cap -->
 *Authority through hierarchical position.*
 The root `CLAUDE.md` is the system's constitution. It is restricted to **no more than 60 lines** and is checked by `scripts/count-instructions.js`. It must pass the *Discoverability Test*: if an agent can infer a rule by reading the code, the rule is excluded. The root file states the agent's Legitimate Power, acting purely as a router that points agents to their specialized scopes.
 
 ### 2.5 Information Power (Progressive Disclosure)
+<!-- status: implemented tests=tests/rules.test.js#all path-scoped rules declare frontmatter paths (IC-8) -->
 *Control over critical data flow.*
 To respect the instruction limit, we weaponize Information Power. Context is aggressively withheld from agents until necessary, using **path-scoped rule files** (`.claude/rules/*.md` with YAML frontmatter).
 - If an agent touches `src/api/**`, it is granted `.claude/rules/drafter-api.md`.
@@ -72,6 +80,7 @@ To respect the instruction limit, we weaponize Information Power. Context is agg
 This ensures the instruction budget is spent exclusively on the immediate task.
 
 ### 2.6 Expert Power (Role-Based Partitioning)
+<!-- status: background -->
 *Influence through specialized knowledge.*
 We abandon the monolithic generalist agent and partition execution across isolated **Git worktrees** using specialized agents.
 - **The Executive Orchestrator:** Holds Legitimate Power. Manages `flow.config.json` and delegates tasks. Never writes code.
@@ -79,6 +88,7 @@ We abandon the monolithic generalist agent and partition execution across isolat
 - **The Auditor:** Holds Expert Power (independent specialist judgement). Its instruction budget is spent entirely on verification.
 
 ### 2.7 Rational Persuasion (The Empirical Contract)
+<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
 *Influence through logical argument and evidence.*
 An agent cannot complete a task via "vibes." It must exercise **Rational Persuasion**. Before the Drafter can request an audit, it must generate a deterministic payload at `.orchestration/contracts/<task_id>.json` containing empirical proof of success:
 - Exact `curl` commands and expected HTTP codes.
@@ -88,6 +98,7 @@ An agent cannot complete a task via "vibes." It must exercise **Rational Persuas
 The Auditor ingests this contract and verifies the claims autonomously.
 
 ### 2.8 Enforcement Controls (Tandem State Broker & Kill-Switches)
+<!-- status: planned -->
 *Deterministic enforcement, not a base of power.*
 Because parallel agents operating in isolated worktrees will eventually encounter race conditions (for example both running `npm install`), the system uses an advisory **lock broker**. Agents acquire ephemeral `.lock` files in `.orchestration/locks/` before mutating shared resources.
 
@@ -96,10 +107,12 @@ If an agent hallucinates a non-existent API, violates its path-scope, or fails t
 ---
 
 ## 3. Implementation Blueprint
+<!-- status: background -->
 
 By adopting this architecture, your repository becomes a self-regulating organization. You no longer prompt the AI; you govern the pipeline. See the accompanying `CLAUDE.md` and `.claude/rules/` directory for the optimized implementation of this framework.
 
 ### 3.1 12-Factor Agents: gaps and planned remediations (AF-8)
+<!-- status: background -->
 
 The harness is evaluated against Dex Horthy's 12-Factor Agents. Several factors are only partially met and two are explicitly out of scope. Honest status:
 
@@ -115,12 +128,14 @@ The harness is evaluated against Dex Horthy's 12-Factor Agents. Several factors 
 Addressed in this release: factor 10 (test like software) via `npm test`; factor 12 (log and trace everything) via `.orchestration/artifacts/README.md`; factor 9 (embed in developer workflows) via the CI workflow.
 
 ### 3.2 Known capability gaps
+<!-- status: planned -->
 
 - **Reward power** has no mechanism. There is no positive-reinforcement signal (priority boost, larger token budget) for good work. Planned: a stage-level score that raises the Drafter's retry budget after clean audits.
 - **Coalition tactics** map to the dual-pipeline review mode and consensus gate in sections 3.3 and 3.4: a severe finding must be confirmed by a second, independent pass before it can block a merge. The consensus rule is a review policy, not enforced by a tool.
 - **Log retention** is documented but not yet enforced by a scheduled purge.
 
 ### 3.3 Dual-pipeline review mode
+<!-- status: background -->
 
 `review.config.json` encodes an optional A/B review pattern for changes that
 warrant more scrutiny than the single auditor in `flow.config.json`. Two
@@ -139,6 +154,7 @@ This is an optional, documented capability. The default pipeline remains the
 single auditor in `flow.config.json`.
 
 ### 3.4 Consensus-gating rule
+<!-- status: background -->
 
 A single auditor pass is fallible, so the harness defines a consensus gate for
 severe findings. A **P0 or P1 finding from a single pass must be confirmed by a
@@ -159,6 +175,7 @@ both required status checks on `main`. Consensus review is supplementary
 judgement on top of that gate, never a replacement for it.
 
 ### 3.5 The split gate: repo-wide config and per-task intents
+<!-- status: implemented tests=tests/intent-gate.test.js#verify --base exits 0 when base has yukl.config.json and the task intent -->
 
 `yukl verify` enforces two kinds of rules, now read from two different places
 instead of one root file:
@@ -220,6 +237,7 @@ PR onwards.
 in `.orchestration/intents/`, alongside the repo-only governance checks.
 
 ### 3.6 Installing the harness: `yukl init`
+<!-- status: implemented tests=tests/init.test.js#init a node-only repo: detected commands, null for the rest, checkout-sha pin -->
 
 `yukl init [--cwd <dir>] [--force] [--yukl-pin <sha>] [--project-dir <rel>]...
 [--command <key>=<cmd>]...` installs the harness into a target repository on a
@@ -297,3 +315,184 @@ next PR on.
 realpaths of `import.meta.url` and `process.argv[1]`, which works through
 npm's `.bin` shim (a symlink on Linux, a `.cmd` wrapper on Windows) and still
 refuses to run when the module is imported by the test runner.
+
+---
+
+## 4. The Lifecycle Runtime
+<!-- status: background -->
+
+Section 3 documents the gates that check work. This section documents the v2
+runtime that carries a task through those gates: the commands, the state they
+read and write, the policy that decides who may advance a transition, and the
+limits of what the harness can prove. Nothing here claims a guarantee the code
+and its tests do not provide.
+
+### 4.1 The stage machine
+<!-- status: implemented tests=tests/lifecycle-stages.test.js#the full happy path reaches done when every edge is anchored -->
+
+`scripts/lifecycle/stages.js` is a pure state machine over the ordered stages
+`intent`, `scope`, `plan`, `implement`, `prove`, `audit`, `review`, `integrate`
+and the terminal states `done`, `stopped` and `escalated`. An agent may only
+move the lifecycle forward by finishing the current stage with a `stage_done`
+event that carries a 40-hex commit anchor; an unanchored or malformed edge is
+refused (`R-NO-ANCHOR`), and a verdict from the same actor that implemented the
+stage is refused as self-approval (`R-SELF-APPROVAL`). A human may move the
+lifecycle anywhere with a `human_decision` event, including pause, resume and
+stop. `done` and `stopped` are closed to every event; `escalated` is closed to
+agents but a human can pull the task out of it. The `scope` stage may skip
+`plan` only when the skip records a decision rule.
+
+### 4.2 `yukl run`
+<!-- status: implemented tests=tests/command-run.test.js#run --once drives one stage with the configured adapter and agent -->
+
+`yukl run <task_id> [--unattended] [--once] [--cwd <dir>] [--base <git-ref>]`
+is the composition root. It loads the per-task event log, the stage machine,
+the anchors, path enforcement, the failure diagnosis and the runtime and VCS
+adapters named in the `lifecycle` block of `yukl.config.json`, then drives the
+task: with `--once` it takes a single engine step, otherwise it loops until the
+lifecycle is terminal, a stage needs a human, the diagnosis escalates, a stage
+is running or a gate is unsatisfied, or 64 steps have passed. The exit code is
+0 when the run advanced or stopped cleanly, 1 on a refusal or an error, and 2
+on a usage problem. With `--base`, the `lifecycle` block and the policy are
+read from that ref through `git show`, so a task branch cannot name its own
+runtimes; without `--base` the working tree is read, which is a local preview
+rather than a trust boundary.
+
+### 4.3 `yukl status`
+<!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
+
+`yukl status <task_id> [--state-dir <dir>] [--base <ref>]` folds the task's
+log to its state (the stage, the attempt count and the event count), prints the
+last recorded decision (its rule, its rationale, or a human decision with its
+reason), verifies the hash chain and, when the base branch carries a
+`Yukl-Run-Head: <task_id> <hash>` trailer for the task, checks that the log
+still contains the committed head and reports how many events follow it. It
+exits 0 when the chain verifies and any committed head is found, 1 on a broken
+chain, a missing log, an unreadable base or a head the log no longer contains,
+and 2 on a usage error. The state directory defaults to `.orchestration/state`
+from the working directory and the base to `main`.
+
+### 4.4 `yukl decide`
+<!-- status: implemented tests=tests/command-decide.test.js#any call with YUKL_DISPATCH_ID set exits 1 and appends nothing -->
+
+`yukl decide <pause|resume|override|stop|approve> --task <id> --by <name>
+--reason <text> [--to <stage>] [--state-dir <dir>]` appends exactly one
+`human_decision` event with the actor `human:<by>`. `override` requires `--to`
+to name a lifecycle stage and, like `stop`, moves the stage; `pause` and
+`resume` set or clear the paused flag; `approve` re-affirms the current stage.
+A decision on a task whose folded state is terminal exits 1 naming the rule,
+and any call while `YUKL_DISPATCH_ID` is set exits 1, because a dispatched
+agent holds no human authority. A usage problem exits 2. In every refusal the
+log is left byte for byte intact.
+
+### 4.5 The autonomy policy
+<!-- status: implemented tests=tests/lifecycle-policy.test.js#requiresHuman maps human, auto and auto_at_level and fails closed -->
+
+`yukl.policy.json` maps each transition id to `"human"`, `"auto"` or
+`{ auto_at_level: n }`, and sets a `ceiling`, an attempt limit and the run
+budgets. `requiresHuman(policy, transitionId, level)` returns true for
+`"human"`, false for `"auto"`, and for `{ auto_at_level: n }` needs a human
+below level `n`. An unknown transition id, or a value that is neither form,
+fails closed and needs a human. The committed policy makes stage advances,
+within-limit retries, implementation merges, enforcement stops, autonomy
+decreases and reopens automatic, and keeps merging an intent or policy PR,
+raising a budget or ceiling, answering an escalation, bootstrapping init,
+abandoning a task and starting an unattended run human. `--base` reads the
+policy from that ref, so a pull request cannot widen its own autonomy.
+
+### 4.6 Earned autonomy
+<!-- status: implemented tests=tests/lifecycle-track.test.js#autonomyLevel raises to each reached threshold and clamps to the ceiling -->
+
+How much a runtime may do without a human is earned from what it has recorded,
+never from what it claims. `trackRecord` folds a task's events into one
+runtime's clean audits, failed audits and enforcement stops; only
+`audit_verdict` and `enforcement` events carry weight, and an `autonomy_change`
+event is never counted whatever actor wrote it. `autonomyLevel` raises the
+level to each reached threshold in `policy.trackRecord.levels` in ascending
+order, clamps it to `ceiling` and subtracts one for any enforcement stop. With
+the committed policy, five clean audits earn level 1.
+
+### 4.7 Run budgets and unattended runs
+<!-- status: planned -->
+
+`yukl.policy.json` declares `maxWallMinutesPerRun`, `maxTokensPerRun` and
+`maxAgentStartsPerRun`, and requires each to be a positive integer or null. No
+code enforces these budgets yet: they exist so that `yukl run --unattended` can
+be refused while any of them is unset. That refusal is implemented and happens
+before any adapter is started; the committed policy leaves all three null, so
+an unattended run is refused today. What remains planned is the enforcement:
+nothing stops, kills or penalises a run that exceeds a budget once one is set.
+
+### 4.8 The event log
+<!-- status: implemented tests=tests/lifecycle-events.test.js#editing any byte of an earlier line makes verifyChain fail naming that line -->
+
+Each task's state is an append-only JSONL log at
+`.orchestration/state/<task_id>.jsonl`, one self-contained event per line. The
+directory is git-ignored (`.orchestration/state/`), so the log is working
+state, not a committed artefact. Lines are hash-chained: every event stores in
+`prev` the SHA-256 of the raw bytes of the previous line, the first event
+carries `prev: null`, and `seq` counts from 0. `verifyChain` detects any later
+edit, insertion or removal as a mismatch and names the line at fault. A crash
+can leave at most a torn final line; `readEvents` reports that partial tail
+separately and ignores it for folding and verification, while a break earlier
+in the file is fatal. `appendEvent` fsyncs each line before returning.
+
+### 4.9 The run head
+<!-- status: implemented tests=tests/acceptance-a.test.js#AC1: the merged lifecycle anchors every event to the base and commits the run head -->
+
+The event log is not committed as a file. Instead, at the `integrate` stage the
+engine hands the current log head (the SHA-256 of the last line) to the VCS
+adapter, which merges the task branch into the base and records that head in
+the merge commit's message as the trailer `Yukl-Run-Head: <task_id> <hash>`.
+`yukl status` reads the newest such trailer for the task from the base branch
+and checks that the log still contains a line hashing to it. A log that is
+internally consistent but no longer contains the committed head fails that
+check even though its chain verifies.
+
+### 4.10 The runtime adapter interface
+<!-- status: implemented tests=tests/adapter-orca.test.js#the adapter implements the runtime interface -->
+
+A runtime adapter implements `start`, `status`, `result` and `stop`. The
+bundled adapters include `fake` (a scripted test double), `orca` (drives the
+Orca CLI through argument arrays) and `vcs-git-local` (merges through local
+git); `vcs-github` merges through the GitHub CLI, and each adapter file has its
+own test suite.
+
+### 4.11 The lifecycle directory stays adapter-neutral
+<!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
+
+The lifecycle directory imports no adapter directly, so it stays free of any
+single agent's vocabulary and of hard imports of a particular adapter.
+
+### 4.12 The lifecycle block
+<!-- status: implemented tests=tests/command-run.test.js#lifecycleViolations rejects an adapter with no file and a stateDir outside the root -->
+
+The `lifecycle` block of `yukl.config.json` names the adapter and agent for each
+agent stage and the VCS adapter for `integrate`. The build validates that every
+named adapter has a matching file under `scripts/adapters/` and that the state
+directory resolves inside the repository; `yukl run` reads the same checks back
+through `lifecycleViolations`.
+
+### 4.13 Known limits
+<!-- status: background -->
+
+Three limits bound what the machinery above can prove, and they are worth
+stating plainly.
+
+1. **The human and the agent share one GitHub identity.** The harness records
+   who acted in an event, but it cannot prove cryptographically that a
+   `decide` or a merge came from a person rather than an agent using the same
+   account. The `YUKL_DISPATCH_ID` guard and the event log are audit trails,
+   not identity proofs.
+2. **The `YUKL_DISPATCH_ID` guard does not reach Orca workers.** `yukl decide`
+   refuses when `YUKL_DISPATCH_ID` is set, and an adapter that spawns the agent
+   process directly can set it. Orca's `worker-start` cannot set the
+   environment of the worker it launches, so the Orca adapter cannot forward
+   the variable (documented in `scripts/adapters/orca.js`). A worker launched
+   through Orca is therefore not fenced off from `yukl decide` by that guard.
+3. **The uncommitted tail is covered by no committed head.** Events appended
+   after the merge that carries the run-head trailer are real recorded state,
+   but no committed head vouches for them. `yukl status` reports their count as
+   the uncommitted tail rather than claiming they are verified; an agent with
+   write access to the state directory can append events that extend the chain
+   without any committed head contradicting them.

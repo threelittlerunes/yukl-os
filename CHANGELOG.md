@@ -85,6 +85,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workflow ("merge the intent first") can go through the gate; a PR carrying
   contracts must still cover a changed intent file in `files_touched`
   (task G).
+- Documentation status: `README.md`, `docs/YUKL_ARCHITECTURE.md`,
+  `docs/SDLC_PLAN.md`, `CLAUDE.md` and `AGENTS.md` opt in to the doc-status
+  validator (the `<!-- yukl:doc-status -->` marker on the first line) and
+  annotate every `##`/`###` section as `planned`, `background` or
+  `implemented`, the last naming the test that proves it (v2-w4-docs).
+- `docs/YUKL_ARCHITECTURE.md` section 4 documents the lifecycle runtime:
+  `yukl run`, `yukl status` and `yukl decide`, the stage machine, the autonomy
+  policy in `yukl.policy.json`, the earned-autonomy track record, the
+  hash-chained per-task event log under `.orchestration/state/` and the run
+  head committed as a `Yukl-Run-Head` trailer (v2-w4-docs).
+- The architecture document and the README state the three known limits of the
+  harness plainly: the shared GitHub identity, the Orca dispatch-guard gap and
+  the uncommitted tail that no committed head covers (v2-w4-docs).
 
 ### Changed
 - French & Raven (1959) describe sources of power and Yukl & Falbe (1990)
