@@ -121,6 +121,13 @@ test("a verdict from an implement actor is refused at audit", () => {
   assert.equal(result.rule, RULES.SELF_APPROVAL);
 });
 
+test("a padded implement actor is still refused at audit", () => {
+  const state = initialState({ stage: "audit", implementActors: [" agent-x"] });
+  const result = transition(state, agentEvent("agent-x"));
+  assert.equal(result.ok, false);
+  assert.equal(result.rule, RULES.SELF_APPROVAL);
+});
+
 test("a known-good verdict from a different actor is accepted", () => {
   const state = initialState({ stage: "audit", implementActors: ["agent-implement"] });
   const result = transition(state, agentEvent("agent-audit"));
@@ -130,7 +137,7 @@ test("a known-good verdict from a different actor is accepted", () => {
 });
 
 // ---------------------------------------------------------------------------
-// must reject: any edge out of a terminal state
+// must reject: any edge out of a closed state (done or stopped)
 // ---------------------------------------------------------------------------
 
 test("no edge leaves done or stopped", () => {
@@ -147,6 +154,48 @@ test("no edge leaves done or stopped", () => {
       assert.equal(result.rule, RULES.TERMINAL);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// escalated is a human exit, not a dead end
+// ---------------------------------------------------------------------------
+
+test("a human override out of escalated is accepted", () => {
+  const state = initialState({ stage: "escalated" });
+  const result = transition(state, {
+    type: "human_decision",
+    stage: "implement",
+    actor: "human",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.rule, RULES.HUMAN_OVERRIDE);
+  assert.equal(result.next.stage, "implement");
+});
+
+test("an agent stage_done out of escalated is refused", () => {
+  const state = initialState({ stage: "escalated" });
+  const result = transition(state, agentEvent("agent-escalated"));
+  assert.equal(result.ok, false);
+  assert.equal(result.rule, RULES.TERMINAL);
+});
+
+test("a human may resume or stop out of escalated", () => {
+  const resumed = transition(initialState({ stage: "escalated", paused: true }), {
+    type: "human_decision",
+    action: "resume",
+  });
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.rule, RULES.HUMAN_OVERRIDE);
+  assert.equal(resumed.next.stage, "escalated");
+  assert.equal(resumed.next.paused, false);
+
+  const stopped = transition(initialState({ stage: "escalated" }), {
+    type: "human_decision",
+    action: "stop",
+  });
+  assert.equal(stopped.ok, true);
+  assert.equal(stopped.rule, RULES.HUMAN_OVERRIDE);
+  assert.equal(stopped.next.stage, "stopped");
 });
 
 // ---------------------------------------------------------------------------

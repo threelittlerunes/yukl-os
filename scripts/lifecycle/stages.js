@@ -41,6 +41,10 @@ export const RULES = Object.freeze({
   ILLEGAL_EDGE: R_ILLEGAL_EDGE,
 });
 
+// done and stopped are closed to every event. escalated is closed to agent
+// events as well, but a human may still pull the lifecycle out of it.
+const CLOSED = Object.freeze(["done", "stopped"]);
+
 const NEXT_STAGE = Object.freeze({
   intent: "scope",
   scope: "plan",
@@ -87,8 +91,14 @@ export function transition(state, event, options = {}) {
   if (!isKnownStage(stage)) {
     return refuse(state, R_ILLEGAL_EDGE);
   }
-  if (TERMINAL.includes(stage)) {
+  if (CLOSED.includes(stage)) {
     return refuse(state, R_TERMINAL);
+  }
+  if (stage === "escalated") {
+    if (event?.type !== "human_decision") {
+      return refuse(state, R_TERMINAL);
+    }
+    return byHuman(state, event);
   }
   if (event?.type === "human_decision") {
     return byHuman(state, event);
@@ -118,7 +128,7 @@ function byAgent(state, event, requiresHuman) {
     return refuse(state, R_NO_ANCHOR);
   }
 
-  const implementActors = normaliseList(state.implementActors);
+  const implementActors = normaliseActors(state.implementActors);
   if (from === "audit" && to === "review" && implementActors.includes(actor)) {
     return refuse(state, R_SELF_APPROVAL);
   }
@@ -178,6 +188,14 @@ function isAnchored(anchor) {
 
 function normaliseList(value) {
   return Array.isArray(value) ? [...value] : [];
+}
+
+function normaliseActors(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((actor) => typeof actor === "string")
+    .map((actor) => actor.trim())
+    .filter((actor) => actor !== "");
 }
 
 function allow(next, rule) {
