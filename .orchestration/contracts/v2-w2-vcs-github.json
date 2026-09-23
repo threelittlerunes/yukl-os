@@ -1,0 +1,13 @@
+{
+  "task_id": "v2-w2-vcs-github",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w2-vcs-github.json",
+    "scripts/adapters/vcs-github.js",
+    "tests/adapter-vcs-github.test.js",
+    "tests/fixtures/fake-gh/fake-gh.js"
+  ]
+}
