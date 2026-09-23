@@ -1,0 +1,16 @@
+{
+  "task_id": "v2-w4-docs",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w4-docs.json",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "README.md",
+    "docs/SDLC_PLAN.md",
+    "docs/YUKL_ARCHITECTURE.md"
+  ]
+}

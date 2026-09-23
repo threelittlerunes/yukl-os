@@ -1,26 +1,46 @@
+<!-- yukl:doc-status -->
 # Yukl-OS: SDLC Implementation Plan
 
 ## Phase 1: Position Power & The "Vanilla" Sandbox
-**Situational Control (Native Sandboxing):** Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated.
+<!-- status: background -->
 
-**Legitimate Power (The Orchestrator):** Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to enforce system boundaries and delegate work, preventing sub-agents from altering global project rules.
+This phase has two halves: the sandbox, which the runner provides, and the root
+constitution, which the build checks.
+
+### Situational Control (Native Sandboxing)
+<!-- status: background -->
+Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated. Worktree isolation is provided by the runner, not by a test.
+
+### Legitimate Power (The Orchestrator)
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md stays under the 60-line root cap -->
+Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to enforce system boundaries and delegate work, preventing sub-agents from altering global project rules. The root cap is enforced by `tests/rules.test.js`.
 
 ## Phase 2: Personal Power & "Plan-First" Delegation
+<!-- status: background -->
 **Expert Power (Specialized Harnesses):** Fanning out tasks to specialists is key. Define one agent strictly for planning, another for feature implementation, and perhaps a dedicated agent for refactoring or cleaning up code.
 
-**The Consultation Tactic (Design Contracts):** Before a coding agent executes, it must generate a plan and define empirical acceptance criteria (for example a specific test that must pass). This guarantees the agent is aligned with the orchestrator's intent before burning API tokens.
+**The Consultation Tactic (Design Contracts):** Before a coding agent executes, it must generate a plan and define empirical acceptance criteria (for example a specific test that must pass). This guarantees the agent is aligned with the orchestrator's intent before burning API tokens. In the v2 runtime this is realised by the per-task intent and the proof contract described in section 4 of `docs/YUKL_ARCHITECTURE.md`; the separate planning agent described above is not built.
 
 ## Phase 3: Autonomous Orchestration (The Loops)
+<!-- status: planned -->
 **"Loops Do The Work":** Implement continuous scheduling mechanics (like a `/loop` command). Instead of manually triggering agents, configure them to run via cron jobs overnight to autonomously babysit PRs, auto-rebase branches, or repeatedly attempt to fix flaky CI tests.
 
-**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool.
+**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool. Not built: `yukl run` drives one task to a stopping point and then returns; there is no scheduler and no cron entry.
 
 ## Phase 4: Coercive Guardrails & Rational Persuasion
-**Rational Persuasion (Empirical Verification):** Agents cannot just claim a task is complete. They must "persuade" the orchestrator by passing the empirical acceptance check defined in Phase 2 (for example submitting a passing AST test log or curl command output). In this repository the contract lives at `.orchestration/contracts/<task_id>.json` and is validated by `npm run test`.
+<!-- status: background -->
+This phase pairs a built enforcement with a planned one.
 
-**Coercive Power (Kill-Switches):** Implement lightweight middleware that monitors API budgets and token usage. If an agent loops endlessly or breaches its financial quota, the system exercises coercive power to instantaneously terminate the session.
+### Rational Persuasion (Empirical Verification)
+<!-- status: implemented tests=tests/yukl.test.js#verify fails when an allowlisted command actually exits non-zero -->
+Agents cannot just claim a task is complete. They must "persuade" the orchestrator by passing the empirical acceptance check defined in Phase 2 (for example submitting a passing AST test log or curl command output). In this repository the contract lives at `.orchestration/contracts/<task_id>.json` and is executed by `yukl verify`, which the build and CI run.
+
+### Coercive Power (Kill-Switches)
+<!-- status: planned -->
+Implement lightweight middleware that monitors API budgets and token usage. If an agent loops endlessly or breaches its financial quota, the system exercises coercive power to instantaneously terminate the session. Not built: `yukl.policy.json` declares the run budgets but nothing enforces them (section 4.7 of `docs/YUKL_ARCHITECTURE.md`).
 
 ## Phase 5: Institutional Memory & Self-Improvement (Future Work)
+<!-- status: planned -->
 
 > **Status: FUTURE WORK - not implemented.** This phase describes a target state, not current behaviour. Do not rely on it.
 
@@ -38,6 +58,7 @@
 6. The instruction-budget check passes on the proposed edit, so automated growth cannot silently breach the 150-instruction limit.
 
 ### Open scoping questions (must be answered before planning)
+<!-- status: planned -->
 
 1. **Runtime dependency:** Prerequisite 2 (the contract-and-audit loop in active use) cannot be met until the render/verify runtime exists, because nothing has executed the pipeline end to end before it. Phase 5 is blocked on that runtime.
 2. **Human decisions:** Prerequisites 3 (a scoped GitHub token / App) and 4 (a written review policy for automated edits to `CLAUDE.md` and `AGENTS.md`) are decisions for the repository maintainer, not for the harness.
