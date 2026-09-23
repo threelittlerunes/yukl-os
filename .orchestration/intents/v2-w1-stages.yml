@@ -1,0 +1,35 @@
+intent:
+  goal: "Add the pure stage transition function with anchored advances, self-approval refusal and human override."
+  depends_on:
+    - "v2-w0-test-runner"
+    - "v2-w0-cli-seams"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/stages.js"
+      - "tests/lifecycle-stages.test.js"
+      - ".orchestration/contracts/v2-w1-stages.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
