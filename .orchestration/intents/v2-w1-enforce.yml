@@ -1,0 +1,35 @@
+intent:
+  goal: "Wrap the existing intent path check as run-time path enforcement for a task branch."
+  depends_on:
+    - "v2-w0-test-runner"
+    - "v2-w0-cli-seams"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/enforce.js"
+      - "tests/lifecycle-enforce.test.js"
+      - ".orchestration/contracts/v2-w1-enforce.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
