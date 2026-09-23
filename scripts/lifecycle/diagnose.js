@@ -13,10 +13,10 @@
 // An intervention is never repeated blindly. The engine records, for every
 // attempt, the intervention it chose and the SHA-256 of that intervention's
 // inputs; before returning a table entry, `chooseIntervention` compares both
-// against every attempt already recorded for the stage and moves down the table
-// when they match. Running out of table entries, reaching the per-stage attempt
-// limit or failing to classify at all all end in an escalation rather than
-// another try.
+// against every earlier attempt recorded for the stage, not only the last one,
+// and moves down the table when they match. Running out of table entries,
+// reaching the per-stage attempt limit or failing to classify at all all end in
+// an escalation rather than another try.
 //
 // History is an array of attempt records, oldest first, each shaped
 // `{ stage, category, intervention, inputHash }`, where `category` is a
@@ -183,8 +183,9 @@ function triedPairs(history, stage) {
  * outside the spec), ambiguous_requirement (a question is about intent),
  * conflicting_constraints (two or more failing rules), capability_limit (the
  * run timed out or the runtime refused). Anything else is unclassified. A
- * non-unclassified base category that matches the previous failure for the same
- * stage is promoted to repeated_violation.
+ * repeated path_violation for the same stage is promoted to repeated_violation;
+ * every other category keeps its own table walk, so a second implementation
+ * defect is retried differently rather than stopped.
  */
 export function classify(observation, history = []) {
   const obs = isPlainObject(observation) ? observation : {};
@@ -205,29 +206,33 @@ export function classify(observation, history = []) {
     base = "capability_limit";
   }
 
-  if (base !== "unclassified") {
+  if (base === "path_violation") {
     const previous = previousAttempt(history, stage);
     const previousCategory = previous ? (previous.baseCategory ?? previous.category) : null;
-    if (previousCategory === base) return "repeated_violation";
+    if (previousCategory === "path_violation") return "repeated_violation";
   }
   return base;
 }
 
-/** Coerce a diagnosis argument into `{ stage, category, observation }`. */
-function normaliseDiagnosis(diagnosis) {
+/**
+ * Coerce a diagnosis argument into `{ stage, category, observation }`. When no
+ * category is supplied the observation is classified here, with `history`
+ * passed through so a repeated path violation is still recognised.
+ */
+function normaliseDiagnosis(diagnosis, history) {
   if (typeof diagnosis === "string") {
     return { stage: null, category: diagnosis, observation: null };
   }
   if (!isPlainObject(diagnosis)) {
     return { stage: null, category: "unclassified", observation: null };
   }
+  const stage = typeof diagnosis.stage === "string" ? diagnosis.stage : null;
+  const observation = isPlainObject(diagnosis.observation) ? diagnosis.observation : diagnosis;
   const category =
-    typeof diagnosis.category === "string" ? diagnosis.category : classify(diagnosis);
-  return {
-    stage: typeof diagnosis.stage === "string" ? diagnosis.stage : null,
-    category,
-    observation: diagnosis.observation ?? diagnosis,
-  };
+    typeof diagnosis.category === "string"
+      ? diagnosis.category
+      : classify({ ...observation, stage: observation.stage ?? stage }, history);
+  return { stage: observation.stage ?? stage, category, observation };
 }
 
 /** The positive per-stage attempt limit in `policy`, or null when unset. */
@@ -236,13 +241,67 @@ function attemptLimit(policy) {
   return Number.isInteger(limit) && limit > 0 ? limit : null;
 }
 
-/** The inputs a tactic would run with; hashed to detect a repeated attempt. */
-function buildInputs(diagnosis) {
-  return {
-    stage: diagnosis.stage,
-    category: diagnosis.category,
-    observation: diagnosis.observation ?? null,
-  };
+/** The files or terms a question named outside the spec, when it did. */
+function namedOutsideSpec(obs) {
+  if (Array.isArray(obs.namedFiles)) return obs.namedFiles;
+  if (Array.isArray(obs.pathViolations)) return obs.pathViolations;
+  const question = isPlainObject(obs.question) ? obs.question : null;
+  if (question && question.namesOutsideSpec === true) return question.text ?? null;
+  return null;
+}
+
+/**
+ * The inputs a tactic would run with. Each tactic gets its own shape, so the
+ * hash of these inputs is meaningful: a retry carries the failing output, an
+ * apprising carries the context to add, and a runtime move carries the switch.
+ * Called per table entry because the shape depends on the tactic.
+ */
+function buildInputs(entry, diagnosis, previous) {
+  const obs = isPlainObject(diagnosis.observation) ? diagnosis.observation : {};
+  const stage = diagnosis.stage ?? null;
+
+  if (entry.intervention === "retry") {
+    return {
+      tactic: entry.tactic,
+      stage,
+      failingOutput: {
+        exitCode: Number.isInteger(obs.exitCode) ? obs.exitCode : null,
+        proofFailed: obs.proofFailed === true,
+        output: obs.output ?? obs.proofOutput ?? null,
+      },
+    };
+  }
+  if (entry.intervention === "apprising") {
+    return {
+      tactic: entry.tactic,
+      stage,
+      context: {
+        named: namedOutsideSpec(obs),
+        previousFailure: previous ? (previous.baseCategory ?? previous.category ?? null) : null,
+      },
+    };
+  }
+  if (entry.intervention === "collaboration" || entry.intervention === "switch_runtime") {
+    return {
+      tactic: entry.tactic,
+      stage,
+      runtimeSwitch: {
+        from: obs.runtime ?? null,
+        to: obs.nextRuntime ?? obs.runtimeTo ?? null,
+      },
+    };
+  }
+  if (entry.intervention === "consultation") {
+    const question = isPlainObject(obs.question) ? obs.question : null;
+    return {
+      tactic: entry.tactic,
+      stage,
+      question: question
+        ? { text: question.text ?? null, aboutIntent: question.aboutIntent === true }
+        : null,
+    };
+  }
+  return { tactic: entry.tactic, stage, category: diagnosis.category ?? null };
 }
 
 function deterministic(fields, rule, intervention, rationale) {
@@ -287,7 +346,7 @@ function adaptive(fields, entry, inputs, inputHash) {
  * `R-TABLE-EXHAUSTED`.
  */
 export function chooseIntervention(diagnosis, history = [], policy = {}) {
-  const record = normaliseDiagnosis(diagnosis);
+  const record = normaliseDiagnosis(diagnosis, history);
   const attempts = forStage(normaliseHistory(history), record.stage).length;
   const fields = { stage: record.stage, attempt: attempts + 1, category: record.category };
 
@@ -320,10 +379,11 @@ export function chooseIntervention(diagnosis, history = [], policy = {}) {
   }
 
   const tried = triedPairs(history, record.stage);
-  const inputs = buildInputs(record);
-  const inputHash = hashInputs(inputs);
+  const previous = previousAttempt(history, record.stage);
   for (const entry of entries) {
     if (entry.rule) return deterministic(fields, entry.rule, entry.intervention, entry.rationale);
+    const inputs = buildInputs(entry, record, previous);
+    const inputHash = hashInputs(inputs);
     if (tried.has(`${entry.intervention}\u0000${inputHash}`)) continue;
     return adaptive(fields, entry, inputs, inputHash);
   }
