@@ -11,5 +11,14 @@
     "locks": ".orchestration/locks",
     "artifacts": ".orchestration/artifacts"
   },
-  "allowlist": ["npm run build", "npm run test"]
+  "allowlist": ["npm run build", "npm run test"],
+  "lifecycle": {
+    "runtimes": {
+      "implement": { "adapter": "orca", "agent": "opencode" },
+      "audit": { "adapter": "orca", "agent": "antigravity" },
+      "review": { "adapter": "orca", "agent": "antigravity" }
+    },
+    "vcs": "vcs-github",
+    "stateDir": ".orchestration/state"
+  }
 }
