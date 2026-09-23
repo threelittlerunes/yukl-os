@@ -2,6 +2,7 @@
 node_modules/
 
 # Orchestration runtime output
+.orchestration/state/
 .orchestration/artifacts/*.log
 .orchestration/artifacts/*.log.gz
 .orchestration/worktrees/
