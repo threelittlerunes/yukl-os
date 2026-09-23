@@ -1,0 +1,32 @@
+intent:
+  goal: "Run one attended docs task end to end with yukl run through the Orca and GitHub adapters."
+  depends_on:
+    - "v2-w4-docs"
+  scope:
+    allowed_paths:
+      - "docs/pilot/v2-pilot.md"
+      - ".orchestration/contracts/v2-w5-pilot.json"
+    forbidden_paths:
+      - "scripts/yukl.js"
+      - "scripts/validate-config.js"
+      - "scripts/repo-checks.js"
+      - "scripts/count-instructions.js"
+      - "package.json"
+      - "package-lock.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".claude/**"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "flow.config.json"
+      - "review.config.json"
+      - "orca.yaml"
+      - "templates/**"
+
+consultation:
+  requires_human_approval: false
