@@ -1,0 +1,19 @@
+{
+  "task_id": "v3-w2-vcs-sync",
+  "empirical_proof": [
+    {
+      "command": "npm run build",
+      "expected_exit_code": 0
+    },
+    {
+      "command": "npm run test",
+      "expected_exit_code": 0
+    }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v3-w2-vcs-sync.json",
+    "scripts/commands/run.js",
+    "scripts/commands/vcs-sync.js",
+    "scripts/yukl.js"
+  ]
+}
