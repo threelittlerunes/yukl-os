@@ -149,6 +149,22 @@ function baseScript(overrides = {}) {
   });
 }
 
+/**
+ * A script for the restart bad twin: implement fails on its first attempt, so
+ * the restart sees no completion and starts implement again. The two attempts
+ * write different bytes so each commit has something to record.
+ */
+function restartScript() {
+  const steps = baseScript();
+  const implement = steps[3];
+  return [
+    ...steps.slice(0, 3),
+    { ...implement, files: { "artefacts/implement.txt": "attempt one\n" }, exitCode: 1 },
+    { ...implement, files: { "artefacts/implement.txt": "attempt two\n" }, exitCode: 0 },
+    ...steps.slice(4),
+  ];
+}
+
 /** Adapt the fake runtime to the engine's opaque-handle interface. */
 function fakeRuntime(fake) {
   return {
@@ -373,6 +389,35 @@ test("AC2 must-reject: a tampered log line breaks the chain", async () => {
   const result = verifyChain(tampered);
   assert.equal(result.ok, false, "a tampered decision must break the chain");
   assert.equal(result.line, 2, "the edited line is named through its successor");
+});
+
+test("AC2 must-reject: a restart that starts implement again is caught", async () => {
+  const root = makeTempDir("yukl-accept-restart-bad-");
+  const ctx = await buildRepo(root);
+  const fake = createFakeRuntime({ script: restartScript() });
+  const vcs = createVcs({ repoDir: ctx.work, base: BASE });
+
+  // First attempt: implement fails, so its stage_failed closes the handle and
+  // the log records no completion for it.
+  const first = makeDeps({ ...ctx, fake, vcs });
+  const stopped = await runUntilBlocked({ taskId: TASK_ID, deps: first, maxSteps: 32 });
+  assert.equal(stopped.status, "escalated");
+  assert.equal(stopped.stage, "implement");
+
+  // The restart replays to implement with no open handle, so it starts a
+  // second agent for the same stage.
+  const restarted = await step({ taskId: TASK_ID, deps: makeDeps({ ...ctx, fake, vcs }) });
+  assert.equal(restarted.status, "started");
+  assert.equal(restarted.stage, "implement");
+
+  const implementStarts = fake.starts.filter((handle) => handle.stage === "implement");
+  assert.equal(implementStarts.length, 2, "the restart started implement a second time");
+  assert.notEqual(implementStarts.length, 1, "the start count is not 1 on this input");
+  assert.throws(
+    () => assert.equal(implementStarts.length, 1, "implement is never started a second time"),
+    /implement is never started a second time/,
+    "the check the AC2 control relies on must fail on this input",
+  );
 });
 
 // ---------------------------------------------------------------------------
