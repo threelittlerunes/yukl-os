@@ -1,0 +1,15 @@
+{
+  "task_id": "v2-w3-run-command",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".gitignore",
+    ".orchestration/contracts/v2-w3-run-command.json",
+    "scripts/commands/run.js",
+    "scripts/validators/lifecycle.js",
+    "tests/command-run.test.js",
+    "yukl.config.json"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "v2-w3-acceptance-a",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w3-acceptance-a.json",
+    "tests/acceptance-a.test.js"
+  ]
+}
