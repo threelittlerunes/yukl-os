@@ -10,11 +10,19 @@
 Yukl-OS maps French & Raven's bases of power and Yukl's influence tactics onto deterministic pipeline constraints, so an AI workforce is bounded by architecture rather than by good intentions in a prompt.
 
 ## Key features
-<!-- status: implemented tests=tests/rules.test.js#every rule file stays inside its instruction budget (AF-4) -->
+<!-- status: background -->
 
-- **Cognitive budget enforcement** - instruction counts are measured and capped, so "too much context" fails the build instead of degrading silently.
-- **Empirical proof contracts** - an agent cannot finish a task without writing executable proof to `.orchestration/contracts/<task_id>.json`, which `yukl verify` executes before a merge.
-- **Path-scoped progressive disclosure** - an agent receives only the rule files matching the paths it is allowed to touch, and the build checks that the root router points at every rule file.
+### Cognitive budget enforcement
+<!-- status: implemented tests=tests/rules.test.js#every rule file stays inside its instruction budget (AF-4) -->
+Instruction counts are measured and capped, so "too much context" fails the build instead of degrading silently.
+
+### Empirical proof contracts
+<!-- status: implemented tests=tests/yukl.test.js#verify passes a known-good contract with allowlisted commands -->
+An agent cannot finish a task without writing executable proof to `.orchestration/contracts/<task_id>.json`, which `yukl verify` executes before a merge.
+
+### Path-scoped progressive disclosure
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md section 2 routes every rule file (V-1) -->
+An agent receives only the rule files matching the paths it is allowed to touch, and the build checks that the root router points at every rule file.
 
 ## Planned features
 <!-- status: planned -->

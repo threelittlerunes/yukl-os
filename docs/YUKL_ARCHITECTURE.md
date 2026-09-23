@@ -449,20 +449,31 @@ and checks that the log still contains a line hashing to it. A log that is
 internally consistent but no longer contains the committed head fails that
 check even though its chain verifies.
 
-### 4.10 Adapters
+### 4.10 The runtime adapter interface
 <!-- status: implemented tests=tests/adapter-orca.test.js#the adapter implements the runtime interface -->
 
-The lifecycle directory imports no adapter directly (see
-`tests/runtime-neutrality.test.js`). A runtime adapter implements `start`,
-`status`, `result` and `stop`, and the bundled adapters include `fake` (a
-scripted test double), `orca` (drives the Orca CLI through argument arrays) and
-`vcs-git-local` (merges through local git); `vcs-github` merges through the
-GitHub CLI. The `lifecycle` block names the adapter and agent for each agent
-stage and the VCS adapter for `integrate`, and the build validates that every
-named adapter has a matching file under `scripts/adapters/` and that the state
-directory resolves inside the repository.
+A runtime adapter implements `start`, `status`, `result` and `stop`. The
+bundled adapters include `fake` (a scripted test double), `orca` (drives the
+Orca CLI through argument arrays) and `vcs-git-local` (merges through local
+git); `vcs-github` merges through the GitHub CLI, and each adapter file has its
+own test suite.
 
-### 4.11 Known limits
+### 4.11 The lifecycle directory stays adapter-neutral
+<!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
+
+The lifecycle directory imports no adapter directly, so it stays free of any
+single agent's vocabulary and of hard imports of a particular adapter.
+
+### 4.12 The lifecycle block
+<!-- status: implemented tests=tests/command-run.test.js#lifecycleViolations rejects an adapter with no file and a stateDir outside the root -->
+
+The `lifecycle` block of `yukl.config.json` names the adapter and agent for each
+agent stage and the VCS adapter for `integrate`. The build validates that every
+named adapter has a matching file under `scripts/adapters/` and that the state
+directory resolves inside the repository; `yukl run` reads the same checks back
+through `lifecycleViolations`.
+
+### 4.13 Known limits
 <!-- status: background -->
 
 Three limits bound what the machinery above can prove, and they are worth

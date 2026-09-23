@@ -2,10 +2,18 @@
 # Yukl-OS: SDLC Implementation Plan
 
 ## Phase 1: Position Power & The "Vanilla" Sandbox
-<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md stays under the 60-line root cap -->
-**Situational Control (Native Sandboxing):** Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated.
+<!-- status: background -->
 
-**Legitimate Power (The Orchestrator):** Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to enforce system boundaries and delegate work, preventing sub-agents from altering global project rules. The root cap is enforced by `tests/rules.test.js`; worktree isolation is provided by the runner, not by a test.
+This phase has two halves: the sandbox, which the runner provides, and the root
+constitution, which the build checks.
+
+### Situational Control (Native Sandboxing)
+<!-- status: background -->
+Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated. Worktree isolation is provided by the runner, not by a test.
+
+### Legitimate Power (The Orchestrator)
+<!-- status: implemented tests=tests/rules.test.js#CLAUDE.md stays under the 60-line root cap -->
+Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to enforce system boundaries and delegate work, preventing sub-agents from altering global project rules. The root cap is enforced by `tests/rules.test.js`.
 
 ## Phase 2: Personal Power & "Plan-First" Delegation
 <!-- status: background -->
