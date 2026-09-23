@@ -1,0 +1,30 @@
+{
+  "autonomy": {
+    "advance-stage-on-gate-pass": "auto",
+    "retry-within-limit": "auto",
+    "merge-implementation-pr": "auto",
+    "stop-on-enforcement": "auto",
+    "autonomy-decrease": "auto",
+    "autonomy-increase-to-ceiling": "auto",
+    "reopen-earlier-stage": "auto",
+    "merge-intent-pr": "human",
+    "merge-policy-pr": "human",
+    "raise-budget-or-ceiling": "human",
+    "answer-escalation": "human",
+    "bootstrap-init-pr": "human",
+    "abandon-task": "human",
+    "start-unattended-run": "human"
+  },
+  "ceiling": 1,
+  "limits": {
+    "maxAttemptsPerStage": 3
+  },
+  "budgets": {
+    "maxWallMinutesPerRun": null,
+    "maxTokensPerRun": null,
+    "maxAgentStartsPerRun": null
+  },
+  "trackRecord": {
+    "levels": [{ "level": 1, "minCleanRuns": 5 }]
+  }
+}
