@@ -1,0 +1,15 @@
+{
+  "task_id": "v2-w0-cli-seams",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v2-w0-cli-seams.json",
+    "scripts/commands/.gitkeep",
+    "scripts/validate-config.js",
+    "scripts/validators/.gitkeep",
+    "scripts/yukl.js",
+    "tests/seams.test.js"
+  ]
+}

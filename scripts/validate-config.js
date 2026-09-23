@@ -7,8 +7,9 @@
 // instruction budgets, AGENTS.md parity) to scripts/repo-checks.js. Exits
 // non-zero on any failure.
 
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readJson, readYaml, ROOT, CONTRACT_SCHEMA } from "./lib/harness.js";
 import { INTENTS_DIR, taskIntentViolations, yuklConfigViolations } from "./yukl.js";
 import {
@@ -182,9 +183,56 @@ export function validateAll() {
   return { ok: errors.length === 0, errors, groups };
 }
 
-function main() {
-  const { ok, errors } = validateAll();
-  if (!ok) {
+const VALIDATORS_DIR = join(ROOT, "scripts", "validators");
+
+/**
+ * Run every validator plugin under `validatorsDir` (default: the repo's
+ * scripts/validators/). Only *.js files are loaded, in sorted order; a missing
+ * directory, or one holding just a .gitkeep, yields no errors. Each module
+ * exports `name` (string) and `validate(root)` returning `{ errors: string[] }`
+ * (it may be async); every reported error is prefixed `[plugin:<name>] `, and a
+ * module missing `name` or `validate` is itself an error.
+ */
+export async function validatePlugins({ validatorsDir = VALIDATORS_DIR } = {}) {
+  const errors = [];
+  if (!existsSync(validatorsDir)) return { ok: true, errors };
+
+  const files = readdirSync(validatorsDir)
+    .filter((f) => f.endsWith(".js"))
+    .sort();
+
+  for (const file of files) {
+    let mod;
+    try {
+      mod = await import(pathToFileURL(join(validatorsDir, file)).href);
+    } catch (err) {
+      errors.push(`[plugin:${file}] failed to load: ${err?.message ?? err}`);
+      continue;
+    }
+    if (typeof mod.name !== "string" || mod.name.trim() === "") {
+      errors.push(`[plugin:${file}] plugin is missing a "name" export`);
+      continue;
+    }
+    if (typeof mod.validate !== "function") {
+      errors.push(`[plugin:${mod.name}] plugin is missing a "validate" export`);
+      continue;
+    }
+    try {
+      const result = await mod.validate(ROOT);
+      for (const e of result?.errors ?? []) errors.push(`[plugin:${mod.name}] ${e}`);
+    } catch (err) {
+      errors.push(`[plugin:${mod.name}] threw: ${err?.message ?? err}`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+async function main() {
+  const { errors: coreErrors } = validateAll();
+  const { errors: pluginErrors } = await validatePlugins();
+  const errors = [...coreErrors, ...pluginErrors];
+  if (errors.length > 0) {
     console.error("Harness config validation FAILED:");
     for (const e of errors) console.error(`  - ${e}`);
     process.exitCode = 1;
@@ -194,5 +242,8 @@ function main() {
 }
 
 if (process.argv[1]?.endsWith("validate-config.js")) {
-  main();
+  main().catch((err) => {
+    console.error(`validate-config: ${err?.stack ?? err}`);
+    process.exitCode = 1;
+  });
 }
