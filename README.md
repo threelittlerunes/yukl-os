@@ -11,9 +11,9 @@ Yukl-OS maps French & Raven's bases of power and Yukl's influence tactics onto d
 ## Key features
 
 - **Cognitive budget enforcement** - instruction counts are measured and capped, so "too much context" fails the build instead of degrading silently.
-- **Power-based role isolation** - each agent holds a defined base of power (Legitimate, Expert, Coercive), not a vague "be a senior developer" persona.
+- **Power-based role isolation** - each agent holds a defined base of power (Legitimate, Expert), not a vague "be a senior developer" persona.
 - **Empirical proof contracts** - an agent cannot finish a task without writing executable proof to `.orchestration/contracts/<task_id>.json`.
-- **Coercive retry loops** - a failed audit routes the work deterministically back to implementation, up to `maxRetries`, with no human hope required.
+- **Coercive retry loops** - planned: a failed audit would route the work deterministically back to implementation, up to `maxRetries`, with no human hope required.
 - **Path-scoped progressive disclosure** - an agent receives only the rule files matching the paths it is allowed to touch.
 
 ## Pipeline
@@ -23,9 +23,9 @@ flowchart LR
     A["INTENT.md"] --> B["Legitimate Power\n(Scope Lock)"]
     B --> C["Expert Power\n(Isolated Drafter)"]
     C --> D["Rational Persuasion\n(Proof Contract)"]
-    D --> E["Coercive Power\n(Audit)"]
+    D --> E["Audit\n(Expert Power)"]
     E -->|PASS| F["Merge"]
-    E -->|FAIL| C
+    E -. "FAIL (retry planned)" .-> C
     G["Information Power\n(Progressive Disclosure)"] -.-> C
 ```
 
@@ -104,7 +104,7 @@ flowchart TD
     Contract --> Auditor
     
     Auditor -->|Pass| Merge
-    Auditor -- "Fail (Process Kill & Retry)<br/>[Coercive Power]" --> Drafter
+    Auditor -. "Fail (Process Kill & Retry)<br/>[planned]" .-> Drafter
 ```
 
 Yukl-OS draws on two distinct organisational-psychology frameworks: **French & Raven's six bases of power** (where influence comes from) and **Yukl's eleven influence tactics** (how influence is attempted). The harness maps each mechanism onto one concept from those frameworks.
@@ -117,10 +117,10 @@ Yukl-OS draws on two distinct organisational-psychology frameworks: **French & R
 | Auditor (independent judgement) | French & Raven base | Expert power |
 | Contract verification loop | Yukl tactic | Rational persuasion |
 | Mandatory human scope interview | Yukl tactic | Consultation |
-| `onFailGoto` retry and process kill | French & Raven base | Coercive power |
+| `onFailGoto` retry and process kill (planned) | Structural design | Enforcement (engineering control) |
 | Isolated Git worktree and lock broker | Structural design | Environment shapes behaviour |
 
-Power bases originate from French & Raven (1959); Yukl's taxonomy (1990) integrates them with eleven influence tactics into a unified model.
+French & Raven (1959) describe the sources of power; Yukl & Falbe (1990) describe the eleven influence tactics. The two are distinct frameworks.
 
 Two non-mappings are deliberate. **Referent power** (influence through admiration) is a human social mechanism with no meaningful agent equivalent, so the harness does not claim it. **Reward power** is a known gap, recorded in section 3.2 of the architecture document.
 
