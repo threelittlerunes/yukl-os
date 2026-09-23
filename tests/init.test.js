@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +76,63 @@ function writeTreeFile(dir, relPath, content = "x") {
 function commitAll(dir, message) {
   git(["add", "-A"], dir);
   git(["commit", "-q", "-m", message], dir);
+}
+
+function bashAvailable() {
+  return spawnSync("bash", ["--version"], { encoding: "utf8" }).status === 0;
+}
+
+/** The bash executable to run: the WSL shim needs its full Windows path
+ * because the child env carries a POSIX PATH the Windows loader cannot use. */
+function bashExe() {
+  const where = spawnSync("where", ["bash"], { encoding: "utf8" });
+  return where.status === 0 && where.stdout.trim() !== ""
+    ? where.stdout.trim().split(/\r?\n/)[0]
+    : "bash";
+}
+
+/** A path the bash under test understands: /mnt/c/... inside WSL. */
+function posixPath(p) {
+  return process.platform === "win32"
+    ? `/mnt/${p.replace(/^([A-Za-z]):/, (_, drive) => drive.toLowerCase()).replace(/\\/g, "/")}`
+    : p;
+}
+
+/** A clean POSIX PATH for the bash under test: the fake bin dir plus the
+ * standard system dirs. WSL's bash rebuilds PATH itself, so it is exported
+ * inside the script rather than passed through the environment. */
+function bashPath(fakeBin) {
+  return `${posixPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
+}
+
+/** Prefix a rendered shell block with a PATH export (plus any test
+ * variables, also exported because WSL's bash does not inherit the Windows
+ * environment block), write it to a script file and run it with bash. The
+ * file indirection keeps WSL's interop from mangling `$()` text passed
+ * through argv. */
+function runInBash(script, cwd, vars = {}) {
+  const exports = [
+    `export PATH="${bashPath(join(cwd, "fakebin"))}"`,
+    ...Object.entries(vars).map(([key, value]) => `export ${key}="${value}"`),
+  ].join("\n");
+  const scriptFile = join(cwd, "yukl-bash-script.sh");
+  writeFileSync(scriptFile, `${exports}\n${script}`);
+  chmodSync(scriptFile, 0o755);
+  const result = spawnSync(bashExe(), [posixPath(scriptFile)], {
+    cwd,
+    encoding: "utf8",
+    env: process.env,
+  });
+  rmSync(scriptFile, { force: true });
+  return result;
+}
+
+/** The rendered workflow step named `name` (parsed from the YAML). */
+function renderedStep(workflow, name) {
+  const doc = yaml.load(workflow);
+  const step = doc.jobs["verify-contract"].steps.find((s) => s.name === name);
+  assert.ok(step, `no rendered step named "${name}"`);
+  return step;
 }
 
 // The pin reachability check (F4) would need the network in fixtures, so
@@ -356,10 +421,166 @@ test("renderCiWorkflow emits one npm ci line per node project directory", () => 
     commands: { ...NO_CMDS, build: "npm run build", test: "cd app && npm run test" },
     npmInstalls: ["if [ -f package.json ]; then npm ci; fi", "cd app && npm ci"],
   });
-  assert.match(workflow, /if \[ -f package\.json \]; then npm ci; fi/);
-  assert.match(workflow, /cd app && npm ci/);
-  assert.match(workflow, /cd app && npm run test/);
+  assert.match(workflow, /\( if \[ -f package\.json \]; then npm ci; fi \)/);
+  assert.match(workflow, /\( cd app && npm ci \)/);
+  assert.match(workflow, /\( cd app && npm run test \)/);
 });
+
+test("renderCiWorkflow isolates each check in its own subshell (G1)", () => {
+  const workflow = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc",
+    commands: {
+      ...NO_CMDS,
+      python_check: "cd app && python -m ruff check",
+      python_test: "cd app && python -m pytest",
+    },
+    pythonInstall: null,
+  });
+  const step = renderedStep(workflow, "Run repository checks");
+  const lines = step.run
+    .trim()
+    .split("\n")
+    .map((line) => line.trim());
+  assert.deepEqual(lines, ["( cd app && python -m ruff check )", "( cd app && python -m pytest )"]);
+  assert.ok(
+    step.run
+      .split("\n")
+      .filter(Boolean)
+      .every((line) => /^\s*\( .* \)\s*$/.test(line)),
+  );
+});
+
+test(
+  "the rendered checks block runs with bash: each command stays in its directory (G1)",
+  { skip: bashAvailable() ? false : "bash not available (e.g. a Windows runner without WSL)" },
+  async () => {
+    await withTempDir(async (dir) => {
+      const fakeBin = join(dir, "fakebin");
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, "python"), '#!/bin/sh\nbasename "$PWD"\n');
+      chmodSync(join(fakeBin, "python"), 0o755);
+      mkdirSync(join(dir, "app"));
+
+      const workflow = renderCiWorkflow({
+        baseRef: "main",
+        yuklPin: "abc",
+        commands: {
+          ...NO_CMDS,
+          python_check: "cd app && python -m ruff check",
+          python_test: "cd app && python -m pytest",
+        },
+      });
+      const step = renderedStep(workflow, "Run repository checks");
+      const result = runInBash(step.run, dir);
+      assert.equal(result.status, 0, `checks block failed:\n${result.stdout}\n${result.stderr}`);
+      const records = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+      assert.equal(records.length, 2, "both commands must run");
+      for (const line of records) {
+        assert.equal(line, "app", "every command must run inside app/, not in app/app");
+      }
+    });
+  },
+);
+
+test("renderCiWorkflow fails closed when the pinned yukl produces no check lines (G2)", () => {
+  const workflow = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "deadbeef",
+    commands: { ...NO_CMDS, build: "npm run build" },
+  });
+  const step = renderedStep(workflow, "Verify contracts (yukl)");
+  assert.match(step.run, /set \+e/);
+  assert.match(
+    step.run,
+    /yukl_output=\$\(npm exec --yes --package="github:threelittlerunes\/yukl-os#deadbeef"/,
+  );
+  assert.match(step.run, /yukl_status=\$\?/);
+  assert.match(step.run, /grep -q -E '\^\(PASS\|FAIL\) '/);
+  assert.match(
+    step.run,
+    /yukl produced no output; the pinned version deadbeef cannot run via the npm bin shim, so pin a release that includes task h/,
+  );
+  assert.match(step.run, /exit "\$yukl_status"/);
+});
+
+test(
+  "the rendered verify step: no output fails the gate, FAIL surfaces, PASS passes (G2)",
+  { skip: bashAvailable() ? false : "bash not available (e.g. a Windows runner without WSL)" },
+  async () => {
+    await withTempDir(async (dir) => {
+      const originRepo = join(dir, "origin");
+      mkdirSync(originRepo);
+      git(["-c", "init.defaultBranch=main", "init", "-q"], originRepo);
+      git(["config", "user.name", "Yukl Test"], originRepo);
+      git(["config", "user.email", "yukl-test@example.com"], originRepo);
+      writeTreeFile(
+        originRepo,
+        "yukl.config.json",
+        JSON.stringify({ version: 1, commands: {}, folders: {}, allowlist: [] }),
+      );
+      commitAll(originRepo, "base");
+
+      const repo = join(dir, "repo");
+      mkdirSync(repo);
+      git(["-c", "init.defaultBranch=main", "init", "-q"], repo);
+      git(["config", "user.name", "Yukl Test"], repo);
+      git(["config", "user.email", "yukl-test@example.com"], repo);
+      writeTreeFile(repo, "README.md", "x");
+      commitAll(repo, "base");
+      git(["remote", "add", "origin", originRepo], repo);
+      git(["fetch", "-q", "origin"], repo);
+
+      const fakeBin = join(repo, "fakebin");
+      mkdirSync(fakeBin);
+      writeFileSync(
+        join(fakeBin, "npm"),
+        '#!/bin/sh\ncat "$YUKL_FAKE_OUT"\nexit "$YUKL_FAKE_STATUS"\n',
+      );
+      chmodSync(join(fakeBin, "npm"), 0o755);
+
+      const outRel = "yukl-out.txt";
+      const workflow = renderCiWorkflow({
+        baseRef: "main",
+        yuklPin: "deadbeef",
+        commands: { ...NO_CMDS, build: "npm run build" },
+      });
+      const step = renderedStep(workflow, "Verify contracts (yukl)");
+      // GitHub Actions interpolates ${{ github.base_ref }} before the shell
+      // runs the block; the test does the same substitution. The fake npm
+      // reads a path relative to the repo root, where the step runs.
+      const script = step.run.replace(/\$\{\{\s*github\.base_ref\s*\}\}/g, "main");
+      const runStep = (status) =>
+        runInBash(script, repo, {
+          YUKL_FAKE_OUT: outRel,
+          YUKL_FAKE_STATUS: String(status),
+        });
+
+      writeFileSync(join(repo, outRel), "");
+      const silent = runStep(0);
+      assert.equal(silent.status, 1, "a silently-exiting yukl must fail the gate");
+      assert.match(
+        silent.stdout,
+        /yukl produced no output; the pinned version deadbeef cannot run via the npm bin shim/,
+      );
+
+      writeFileSync(
+        join(repo, outRel),
+        "PASS repo has Git metadata\nFAIL command proof: expected exit 0, got 3\n",
+      );
+      const failing = runStep(1);
+      assert.equal(failing.status, 1, "a FAIL must keep the gate red");
+      assert.match(failing.stdout, /FAIL command proof/, "the FAIL line must be surfaced");
+
+      writeFileSync(
+        join(repo, outRel),
+        "PASS repo has Git metadata\nPASS contract demo.json schema\n",
+      );
+      const passing = runStep(0);
+      assert.equal(passing.status, 0, "PASS-only output must pass the gate");
+    });
+  },
+);
 
 test("renderCiWorkflow leaves no placeholders and prints a notice when nothing is detected", () => {
   const workflow = renderCiWorkflow({ baseRef: "main", yuklPin: "abc", commands: NO_CMDS });
@@ -557,8 +778,8 @@ test("init mirrors the pathfinder layout: Python in app/ with dev extras, auto-d
     const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
     assert.match(workflow, /actions\/setup-python@v5/);
     assert.match(workflow, /pip install -e "app\[dev\]"/);
-    assert.match(workflow, /cd app && python -m ruff check/);
-    assert.match(workflow, /cd app && python -m pytest/);
+    assert.match(workflow, /\( cd app && python -m ruff check \)/);
+    assert.match(workflow, /\( cd app && python -m pytest \)/);
     assert.ok(!workflow.includes("npm ci"), "no package.json anywhere -> no npm ci");
     const doc = yaml.load(workflow);
     assert.equal(doc.jobs["verify-contract"].steps.length, 6);

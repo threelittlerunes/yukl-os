@@ -60,7 +60,10 @@ commit-pinned harness. Subdirectory projects are handled with
 no project file), and `--command test=<cmd>` supplies a proof command when
 none is detectable; without at least one proof command init refuses rather
 than write an invalid config. The harness commit the CI runs must already be
-pushed to the yukl-os remote, so push first or pass `--yukl-pin <sha>`.
+pushed to the yukl-os remote, so push first or pass `--yukl-pin <sha>` - and
+the pin must be at or after the task h merge, because the generated CI gate
+fails closed when the pinned yukl produces no output (older yukl-os versions
+exit 0 silently through the npm bin shim).
 Re-run init after a merge to update the generated files, passing `--force` to
 overwrite an existing config; everything else is left alone.
 

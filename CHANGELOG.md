@@ -29,8 +29,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   auto-detected with a warning. Commands for a subdirectory project carry a
   `cd <dir> && ` prefix (e.g. `cd app && python -m ruff check`) because
   verify executes allowlisted commands from the repo root; the generated CI
-  is Linux-only, and the `cd`/`&&` form is equally valid in sh, cmd and
-  PowerShell (task H).
+  runs each check in its own subshell, so one command's `cd` cannot leak
+  into the next line and break it (task H). The workflow is Linux-only, and
+  the `cd`/`&&` form is equally valid in sh, cmd and PowerShell.
 - The generated CI runs a **commit-pinned** yukl (`npm exec --package=github:threelittlerunes/yukl-os#<sha>`)
   taken from `--yukl-pin` or detected from the harness checkout, never a
   floating ref. Before writing, init verifies the pin is pushed to the
@@ -41,6 +42,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prints "bootstrap: harness not installed at base; this PR is gated by human
   review" and exits 0, so the first PR is gated by human review alone and
   verify runs from the next PR on (task H).
+- The generated verify step fails closed on a silent yukl: it captures the
+  pinned yukl's output and exit status (`set +e`) and, when no line starts
+  with `PASS` or `FAIL`, exits 1 with "yukl produced no output; the pinned
+  version `<sha>` cannot run via the npm bin shim, so pin a release that
+  includes task h". A yukl-os commit from before the task h bin-shim fix
+  exits 0 with no output through npm's `.bin` shim, so pins must be at or
+  after the task h merge; a failing verify still surfaces its output (task H).
 - The generated CI installs Python dependencies: `pip install -e "<dir>[dev]"`
   when `pyproject.toml` declares a dev or test extra under
   `[project.optional-dependencies]`, otherwise `pip install <detected tools>`

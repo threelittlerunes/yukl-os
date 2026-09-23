@@ -265,15 +265,24 @@ Init writes four kinds of files:
   dev extras (`pip install -e "app[dev]"`) when `pyproject.toml` declares a
   `dev` or `test` extra under `[project.optional-dependencies]`; otherwise it
   installs the detected tools (`pip install ruff pytest`) and warns. It runs
-  the detected checks and gates the PR on `yukl verify --base origin/<base_ref>`.
-  The yukl it runs is **commit-pinned**: `npm exec
-  --package=github:threelittlerunes/yukl-os#<sha>` with the SHA taken from
-  `--yukl-pin` or detected from the harness checkout - never a floating ref.
-  Before writing, init verifies the pin is actually pushed to the yukl-os
-  remote (local remote-tracking branches first, `git ls-remote` as fallback):
-  an unpushed pin refuses with "pin `<sha>` is not pushed; push it or pass
-  `--yukl-pin <pushed sha>`". The check fails closed offline;
-  `YUKL_PIN_CHECK=off` skips it with a warning.
+  the detected checks - each line in its own subshell, so a `cd <dir> && `
+  prefix cannot leak into the next line - and gates the PR on
+  `yukl verify --base origin/<base_ref>`. The yukl it runs is
+  **commit-pinned**: `npm exec --package=github:threelittlerunes/yukl-os#<sha>`
+  with the SHA taken from `--yukl-pin` or detected from the harness checkout -
+  never a floating ref. **The pin must be at or after the task h merge**: the
+  verify step captures yukl's output and exit status and, when the output
+  contains no check line (no line starting with `PASS` or `FAIL`), prints
+  "yukl produced no output; the pinned version `<sha>` cannot run via the npm
+  bin shim, so pin a release that includes task h" and exits 1 - a yukl-os
+  commit from before the task h bin-shim fix exits 0 silently through npm's
+  `.bin` shim, and without the guard the gate would pass every PR. A failing
+  verify still surfaces its output (`set +e` around the capture) and the step
+  exits with verify's status. Before writing, init verifies the pin is
+  actually pushed to the yukl-os remote (local remote-tracking branches first,
+  `git ls-remote` as fallback): an unpushed pin refuses with "pin `<sha>` is
+  not pushed; push it or pass `--yukl-pin <pushed sha>`". The check fails
+  closed offline; `YUKL_PIN_CHECK=off` skips it with a warning.
 - **Orchestration dirs** - a `.gitkeep` placeholder inside each of
   `.orchestration/contracts/` and `.orchestration/intents/` so the empty
   directories are trackable in Git.
