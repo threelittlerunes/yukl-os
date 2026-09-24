@@ -208,15 +208,16 @@ function runtimeFactory(scriptsByStage) {
 
 /**
  * The diagnosis seam: classify the observation and choose the next
- * intervention. The pure diagnosis marks escalation with
- * `intervention: "escalate"`; the engine stops the loop on an
- * `action: "escalate"` decision, so the two vocabularies are joined here.
+ * intervention. The decision is handed to the engine exactly as the diagnosis
+ * module produced it - an escalation is marked by `intervention: "escalate"`,
+ * which is the shape the engine's `isEscalation` reads, so this seam adds no
+ * vocabulary of its own.
  */
 function decideFor(policy) {
   return (observation, history) => {
     const decision = diagnose(observation, history?.decisions ?? [], policy);
     assertDecision(decision);
-    return decision.intervention === "escalate" ? { ...decision, action: "escalate" } : decision;
+    return decision;
   };
 }
 

@@ -25,6 +25,19 @@
 // its owner like any lock, so a reclaimer that crashed mid-reclaim leaves a
 // stale guard the next acquirer reclaims in turn.
 //
+// One window is known to remain open, and no code here closes it. Reclaiming a
+// stale guard is itself not serialised - there is no guard for the guard - so
+// two acquirers colliding on the guard of a reclaimer that crashed mid-reclaim
+// can in principle both take it: each removes the guard it found and creates its
+// own, and both then inspect and remove the stale lock. The same-owner re-check
+// each performs on the lock narrows the window to the interval between one
+// acquirer's re-read and its removal, but does not close it, because a second
+// acquirer that re-read the same dead owner inside that interval still removes
+// the lock the first has just created. Closing it would take an unbounded tower
+// of guards, or a lock primitive the file system does not offer portably; the
+// worst case is a lost advisory lock under a crash inside a crash, not corrupt
+// state, so the broker keeps the single guard and records the limit here.
+//
 // The clock, the process id, the host name and the liveness check are all
 // injectable, so the behaviour is testable without a real process, a real clock
 // or a real crash.

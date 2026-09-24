@@ -196,11 +196,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `yukl verify --base` now warns on stderr when the working tree carries
   uncommitted or untracked changes, since the preview checks committed state
   only (base...HEAD) (task B3).
+- The engine now stops a run as escalated when the diagnosis escalates it:
+  `isEscalation` reads the diagnosis's own `intervention: "escalate"` - the
+  shape every deterministic escalation rule carries (`R-ATTEMPT-LIMIT`,
+  `R-UNCLASSIFIED`, `R-TABLE-EXHAUSTED`) - instead of only the older `kind:`,
+  `action:` and `escalate:` spellings. A stage that exhausts its attempts, or
+  fails in a way nothing can classify, now hands the task to a human at once
+  instead of being retried until a run limit happens to stop the run
+  (v3-unattended).
 - The lock broker's stale reclaim is atomic against a rival acquirer: reclaim
   now runs under an exclusive `<name>.lock.reclaim` guard and re-reads the lock
   before removing it, so two acquirers that both see a dead owner can no longer
   both remove and both end up holding the lock; a stale guard is reclaimed like
-  any stale lock (v3-unattended).
+  any stale lock (v3-unattended). Reclaiming that guard is itself not
+  serialised, so two acquirers colliding on a crashed reclaimer's guard can in
+  principle both take it; the same-owner re-check narrows that window but does
+  not close it. The module header of `scripts/lifecycle/locks.js` and section
+  4.15 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
+  (v3-unattended).
 - The unattended-loop tests fail fast instead of hanging when a run limit stops
   firing: their fake sleep and fake runtime are bounded, so a loop with no exit
   throws after a generous number of polls or agent starts. An immediately
