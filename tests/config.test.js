@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readJson, readYaml } from "../scripts/lib/harness.js";
 import { validateFlowConfig, validateIntent } from "../scripts/validate-config.js";
 import {
+  ALLOWED_AGENTS,
   validateGithubStandards,
   validateOrcaYaml,
   validateShippedFiles,
@@ -15,6 +16,21 @@ test("flow.config.json parses and satisfies the pipeline schema", () => {
 
   const { errors } = validateFlowConfig();
   assert.deepEqual(errors, []);
+});
+
+test("orca.yaml and flow.config.json route the drafting runtime to omp and validate (task routing-omp)", () => {
+  const orca = readYaml("orca.yaml");
+  assert.equal(orca.agents.drafter.agent, "omp", "orca.yaml must route the drafter to omp");
+
+  const flow = readJson("flow.config.json");
+  const drafter = flow.pipeline.find((s) => s.id === "expert-power-drafter");
+  assert.ok(drafter, "expert-power-drafter stage is required");
+  assert.equal(drafter.agent, "omp", "the drafter stage must route to omp");
+
+  assert.ok(ALLOWED_AGENTS.includes("omp"), "omp must be an allowed agent");
+
+  assert.deepEqual(validateOrcaYaml().errors, []);
+  assert.deepEqual(validateFlowConfig().errors, []);
 });
 
 test("flow.config.json drafter writes the standardised contract path", () => {

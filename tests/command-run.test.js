@@ -177,7 +177,7 @@ function baseConfig(lifecycle) {
 function gitRepo(lifecycle, policy, extra = {}) {
   return {
     lifecycle: lifecycle ?? {
-      runtimes: { implement: { adapter: "fake", agent: "opencode" } },
+      runtimes: { implement: { adapter: "fake", agent: "omp" } },
       vcs: "vcs-github",
       stateDir: ".orchestration/state",
     },
@@ -291,14 +291,10 @@ test("run --once drives one stage with the configured adapter and agent", async 
     assert.equal(done[0].data.stage, "implement");
 
     const mod = await import(repo.fakeAdapterUrl);
-    assert.equal(
-      mod.createdWith[0].agent,
-      "opencode",
-      "the factory is built with the config agent",
-    );
+    assert.equal(mod.createdWith[0].agent, "omp", "the factory is built with the config agent");
     assert.equal(mod.starts.length, 1, "the fake runtime is started exactly once");
     assert.equal(mod.starts[0].stage, "implement");
-    assert.match(mod.starts[0].spec, /opencode/, "the configured agent reaches the start spec");
+    assert.match(mod.starts[0].spec, /omp/, "the configured agent reaches the start spec");
   });
 });
 
@@ -806,7 +802,7 @@ test("lifecycleViolations rejects an adapter with no file and a stateDir outside
     writeFileSync(join(dir, "scripts", "adapters", "vcs-github.js"), "");
 
     const good = {
-      runtimes: { implement: { adapter: "orca", agent: "opencode" } },
+      runtimes: { implement: { adapter: "orca", agent: "omp" } },
       vcs: "vcs-github",
       stateDir: ".orchestration/state",
     };
@@ -814,7 +810,7 @@ test("lifecycleViolations rejects an adapter with no file and a stateDir outside
 
     const missingAdapter = {
       ...good,
-      runtimes: { implement: { adapter: "nope", agent: "opencode" } },
+      runtimes: { implement: { adapter: "nope", agent: "omp" } },
     };
     const adapterErrors = lifecycleViolations(missingAdapter, dir);
     assert.ok(adapterErrors.some((e) => /scripts\/adapters\/nope\.js/.test(e)));
@@ -840,7 +836,7 @@ test("validate reads yukl.config.json and checks a present block, tolerating abs
     writeFileSync(join(dir, "scripts", "adapters", "vcs-github.js"), "");
 
     const good = {
-      runtimes: { implement: { adapter: "orca", agent: "opencode" } },
+      runtimes: { implement: { adapter: "orca", agent: "omp" } },
       vcs: "vcs-github",
       stateDir: ".orchestration/state",
     };
@@ -850,7 +846,7 @@ test("validate reads yukl.config.json and checks a present block, tolerating abs
     writeFileSync(
       join(dir, "yukl.config.json"),
       JSON.stringify({
-        lifecycle: { ...good, runtimes: { implement: { adapter: "nope", agent: "opencode" } } },
+        lifecycle: { ...good, runtimes: { implement: { adapter: "nope", agent: "omp" } } },
       }),
     );
     const bad = validateLifecycle(dir).errors;

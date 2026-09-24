@@ -30,7 +30,7 @@ agents:
     power: "legitimate"
     write: false
   drafter:
-    agent: "opencode"
+    agent: "omp"
     power: "expert"
     write: true
     rules:

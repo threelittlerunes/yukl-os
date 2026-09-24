@@ -57,7 +57,7 @@ export const SCAN_FILES = [
   ...listRuleFiles(),
 ];
 
-export const ALLOWED_AGENTS = ["claude", "opencode", "codex", "gemini", "antigravity"];
+export const ALLOWED_AGENTS = ["claude", "omp", "opencode", "codex", "gemini", "antigravity"];
 
 export const PLACEHOLDER_RE =
   /Briefly describe|Replace this|\[Replace|\[e\.g\.|Assumption 1\.\.\.|Assumption 2\.\.\.|feature-name/i;
