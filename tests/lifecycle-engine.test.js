@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFakeRuntime } from "../scripts/adapters/fake.js";
-import { appendEvent, headHash, readEvents } from "../scripts/lifecycle/events.js";
+import { appendEvent, headHash, readEvents, verifyChain } from "../scripts/lifecycle/events.js";
 import * as stages from "../scripts/lifecycle/stages.js";
-import { runUntilBlocked, step } from "../scripts/lifecycle/engine.js";
+import { RUN_LIMITS, RUN_LIMIT_RULE, runUntilBlocked, step } from "../scripts/lifecycle/engine.js";
 
 const ANCHOR_COMMIT = "a".repeat(40);
 const MERGE_SHA = "b".repeat(40);
@@ -636,6 +636,320 @@ test("a persisted human_decision stop replays to the stopped terminal state", as
     const outcome = await step({ taskId, deps: makeDeps(dir) });
     assert.equal(outcome.status, "terminal");
     assert.equal(outcome.stage, "stopped");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// unattended runs: wait for a running stage instead of stopping on it, and
+// stop only on the lifecycle's own terms or a breached run limit
+// ---------------------------------------------------------------------------
+
+/**
+ * A runtime that reports `live` for its first `polls` polls and then exits 0.
+ * `startCount` counts the handles it handed out, so a test can prove a waiting
+ * stage is polled rather than restarted.
+ */
+function slowRuntime(polls) {
+  const runtime = {
+    name: "slow",
+    startCount: 0,
+    pollsLeft: polls,
+    start() {
+      runtime.startCount += 1;
+      return `handle-${runtime.startCount}`;
+    },
+    status() {
+      if (runtime.pollsLeft > 0) {
+        runtime.pollsLeft -= 1;
+        return "live";
+      }
+      return "exited";
+    },
+    result() {
+      return { exitCode: 0 };
+    },
+    stop() {},
+  };
+  return runtime;
+}
+
+/** A deps whose clock moves one minute per sleep, so a wall limit is reachable. */
+function tickingDeps(dir, runtime, state) {
+  return makeDeps(dir, {
+    runtime: () => runtime,
+    clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + state.minutes * 60_000),
+  });
+}
+
+/**
+ * A fake sleep for the unattended loop that fails the test instead of hanging.
+ * A poll of an unsettled stage resolves as a microtask, so a regression that
+ * leaves the loop with no exit - a run limit that never fires - spins without
+ * ever yielding to the event loop, and the runner's own timeout (a timer in the
+ * same process) can never fire. Throwing after a generous number of polls turns
+ * that hang into a fast failure; these tests poll a handful of times.
+ */
+function boundedSleep(onPoll, maxPolls = 1000) {
+  let polls = 0;
+  return async () => {
+    polls += 1;
+    if (polls > maxPolls) {
+      throw new Error(`the unattended loop polled ${maxPolls} times without stopping`);
+    }
+    onPoll(polls);
+  };
+}
+
+test("an unattended run waits for a running stage and never restarts it", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-unattended-wait";
+    const runtime = slowRuntime(4);
+    const state = { minutes: 0 };
+    const deps = tickingDeps(dir, runtime, state);
+
+    // Attended: a live stage stops the run immediately, as it always has.
+    const attended = await runUntilBlocked({ taskId, deps, maxSteps: 64 });
+    assert.equal(attended.status, "waiting");
+    assert.equal(attended.stage, "intent");
+    assert.equal(runtime.startCount, 1);
+
+    // Unattended: the same live stage is polled until it settles, and the run
+    // then drives the task to its terminal stage.
+    const slept = [];
+    const result = await runUntilBlocked({
+      taskId,
+      deps,
+      unattended: true,
+      limits: { maxWallMinutesPerRun: 30, maxAgentStartsPerRun: 20 },
+      pollIntervalMs: 5,
+      sleep: boundedSleep(() => {
+        state.minutes += 1;
+        slept.push(state.minutes);
+      }),
+    });
+
+    assert.equal(result.status, "terminal");
+    assert.equal(result.stage, "done");
+    assert.ok(slept.length >= 2, "the unattended run waited for the running stage");
+    assert.equal(
+      runtime.startCount,
+      7,
+      "every agent stage is started exactly once: a polled handle is never restarted",
+    );
+    assert.deepEqual(
+      readEvents(dir, taskId)
+        .events.filter((event) => event.type === "enforcement")
+        .map((event) => event.data.rule),
+      [],
+      "waiting is not an enforcement",
+    );
+    const started = readEvents(dir, taskId).events.filter(
+      (event) => event.type === "stage_started",
+    );
+    assert.equal(started.length, 8, "seven agent starts plus the integrate merge marker");
+    assert.equal(
+      started.filter((event) => event.data.runtime !== "vcs").length,
+      7,
+      "no handle is recorded twice",
+    );
+  });
+});
+
+test("an unattended run stops when its wall-clock limit is breached while it waits", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-unattended-wall";
+    const runtime = slowRuntime(Number.POSITIVE_INFINITY);
+    const state = { minutes: 0 };
+    const deps = tickingDeps(dir, runtime, state);
+
+    const result = await runUntilBlocked({
+      taskId,
+      deps,
+      unattended: true,
+      limits: { maxWallMinutesPerRun: 10, maxAgentStartsPerRun: 50 },
+      pollIntervalMs: 5,
+      sleep: boundedSleep(() => {
+        state.minutes += 5;
+      }),
+    });
+
+    assert.equal(result.status, "limit");
+    assert.equal(result.rule, RUN_LIMIT_RULE);
+    assert.equal(result.stage, "intent");
+    assert.deepEqual(result.limit, { name: RUN_LIMITS.WALL, max: 10, observed: 10 });
+    assert.equal(result.steps.at(-1).status, "waiting", "the breach stopped the loop waiting");
+
+    const log = readEvents(dir, taskId);
+    const enforcement = log.events.filter((event) => event.type === "enforcement");
+    assert.equal(enforcement.length, 1, "the breach is recorded exactly once");
+    assert.equal(enforcement[0].actor, "engine");
+    assert.deepEqual(enforcement[0].data, {
+      stage: "intent",
+      rule: RUN_LIMIT_RULE,
+      limit: { name: RUN_LIMITS.WALL, max: 10, observed: 10 },
+      violations: [],
+    });
+    assert.deepEqual(verifyChain(log), { ok: true });
+  });
+});
+
+test("an unattended run refuses to start the agent that would exceed its start limit", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-unattended-starts";
+    const deps = makeDeps(dir, { runtime: () => settledRuntime() });
+
+    const result = await runUntilBlocked({
+      taskId,
+      deps,
+      unattended: true,
+      limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 },
+      sleep: boundedSleep(() => {}),
+    });
+
+    assert.equal(result.status, "limit");
+    assert.equal(result.rule, RUN_LIMIT_RULE);
+    assert.deepEqual(result.limit, { name: RUN_LIMITS.STARTS, max: 1, observed: 1 });
+
+    const events = readEvents(dir, taskId).events;
+    assert.equal(
+      events.filter((event) => event.type === "stage_started").length,
+      1,
+      "the run never starts the agent that would breach the limit",
+    );
+    const enforcement = events.filter((event) => event.type === "enforcement");
+    assert.equal(enforcement.length, 1);
+    assert.equal(enforcement[0].data.limit.name, RUN_LIMITS.STARTS);
+    assert.equal(
+      enforcement[0].data.stage,
+      "scope",
+      "the refused start names the stage it refused",
+    );
+  });
+});
+
+test("the agent-start limit counts this run's starts, not the log's history", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-unattended-history";
+    // A previous run already started two agents; those starts are not this
+    // run's starts, so this run may spend its limit again.
+    for (const [stage, to] of [
+      ["intent", "scope"],
+      ["scope", "plan"],
+    ]) {
+      appendEvent(dir, taskId, {
+        type: "stage_started",
+        actor: "engine",
+        data: { stage, runtime: "fake", handle: `old-${stage}` },
+      });
+      seedStageDone(dir, taskId, stage, to);
+    }
+
+    const deps = makeDeps(dir, { runtime: () => settledRuntime() });
+    const result = await runUntilBlocked({
+      taskId,
+      deps,
+      unattended: true,
+      limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 2 },
+      sleep: boundedSleep(() => {}),
+    });
+
+    assert.equal(result.status, "limit");
+    assert.deepEqual(result.limit, { name: RUN_LIMITS.STARTS, max: 2, observed: 2 });
+    const started = readEvents(dir, taskId).events.filter(
+      (event) => event.type === "stage_started" && event.data.handle.startsWith("handle-"),
+    );
+    assert.deepEqual(
+      started.map((event) => event.data.stage),
+      ["plan", "implement"],
+      "exactly this run's two starts are spent",
+    );
+  });
+});
+
+test("the step cap bounds an attended run and not an unattended one", async () => {
+  await withTempDir(async (dir) => {
+    const attendedDir = join(dir, "attended");
+    const capped = await runUntilBlocked({
+      taskId: "task-cap",
+      deps: makeDeps(attendedDir, { runtime: () => settledRuntime() }),
+      maxSteps: 2,
+    });
+    assert.equal(capped.status, "max-steps");
+    assert.equal(capped.steps.length, 2);
+
+    const unattended = await runUntilBlocked({
+      taskId: "task-cap",
+      deps: makeDeps(dir, { runtime: () => settledRuntime() }),
+      maxSteps: 1,
+      unattended: true,
+      limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 20 },
+      sleep: boundedSleep(() => {}),
+    });
+    assert.equal(unattended.status, "terminal");
+    assert.equal(unattended.stage, "done");
+    assert.ok(unattended.steps.length > 1, "the step cap does not bound an unattended run");
+  });
+});
+
+test("a run limit bounds an attended run too, not only an unattended one", async () => {
+  await withTempDir(async (dir) => {
+    const limits = { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 };
+    const deps = makeDeps(dir, { runtime: () => settledRuntime() });
+    const stopped = await runUntilBlocked({
+      taskId: "task-attended-limit",
+      deps,
+      maxSteps: 64,
+      limits,
+    });
+
+    assert.equal(stopped.status, "limit", "an attended run stops on the same limit");
+    assert.equal(stopped.rule, RUN_LIMIT_RULE);
+    assert.deepEqual(stopped.limit, { name: RUN_LIMITS.STARTS, max: 1, observed: 1 });
+    assert.ok(stopped.steps.length < 64, "the limit stopped it, not the step cap");
+    const events = readEvents(dir, "task-attended-limit").events;
+    assert.equal(
+      events.filter((event) => event.type === "enforcement").length,
+      1,
+      "an attended breach is recorded like an unattended one",
+    );
+
+    // The same run without limits drives the task to its terminal stage, so the
+    // stop above is the limit and not the lifecycle's own end.
+    const unbounded = await runUntilBlocked({
+      taskId: "task-attended-nolimit",
+      deps,
+      maxSteps: 64,
+    });
+    assert.equal(unbounded.status, "terminal");
+  });
+});
+
+test("an unattended run refuses to loop without a wall-clock limit", async () => {
+  await withTempDir(async (dir) => {
+    const deps = makeDeps(dir, { runtime: () => settledRuntime() });
+    const cases = [
+      { limits: null },
+      { limits: { maxAgentStartsPerRun: 5 } },
+      { limits: { maxWallMinutesPerRun: null, maxAgentStartsPerRun: 5 } },
+      { limits: { maxWallMinutesPerRun: 0, maxAgentStartsPerRun: 5 } },
+    ];
+    for (const options of cases) {
+      await assert.rejects(
+        runUntilBlocked({ taskId: "task-unbounded", deps, unattended: true, ...options }),
+        /maxWallMinutesPerRun/,
+        `expected a refusal for ${JSON.stringify(options.limits)}`,
+      );
+    }
+    await assert.rejects(
+      runUntilBlocked({
+        taskId: "task-unbounded",
+        deps,
+        unattended: true,
+        limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 5 },
+        sleep: "not a function",
+      }),
+      /sleep must be a function/,
+    );
   });
 });
 
