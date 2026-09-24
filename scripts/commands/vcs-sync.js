@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `yukl vcs-sync` publishes the Jujutsu working copy into Git before dispatch.
 //
-//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]
+//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]
 //
 // Orca creates a worker's worktree from a Git ref, so work that exists only in
 // Jujutsu's working-copy commit (`@`) is invisible to a new worker: the worker
@@ -14,11 +14,13 @@
 // sync a dispatcher hook rather than a step someone has to remember.
 //
 // Nothing has to be committed by hand: Jujutsu keeps `@` in step with the
-// working copy on every command, so the sync is a describe (only when `@` has
-// no description yet, so a real message is never overwritten), a bookmark move
+// working copy on every command, so the sync is a bookmark move
 // (`--allow-backwards`, so the ref tracks `@` in both directions) and an
-// export that is verified with Git before it counts. Files Jujutsu ignores
-// (node_modules, .env) are not part of the snapshot.
+// export that is verified with Git before it counts. The sync publishes a ref
+// and never edits `@`: an undescribed working-copy commit is exported exactly
+// as it is - Jujutsu's own `jj git push` still refuses to publish it - and a
+// description the author wrote is left byte-for-byte alone. Files Jujutsu
+// ignores (node_modules, .env) are not part of the snapshot.
 //
 // Exit codes: 0 when the working copy was published or there was no Jujutsu
 // workspace to publish (a plain Git repository is not a mistake), 1 when a
@@ -28,10 +30,7 @@
 import { resolve } from "node:path";
 import { JJ_WC_BOOKMARK, isJjBookmarkName, syncJjWorkingCopy } from "../yukl.js";
 
-const USAGE = [
-  "usage:",
-  "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]",
-].join("\n");
+const USAGE = ["usage:", "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]"].join("\n");
 
 /**
  * Parse the raw arguments after `vcs-sync`. Returns `{ error }` for a usage
@@ -40,17 +39,17 @@ const USAGE = [
  * bookmark name is checked here as well, before jj is spawned at all.
  */
 export function parseArgs(argv) {
-  const options = { cwd: null, bookmark: JJ_WC_BOOKMARK, message: null, json: false };
+  const options = { cwd: null, bookmark: JJ_WC_BOOKMARK, json: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json") {
       options.json = true;
       continue;
     }
-    if (arg === "--cwd" || arg === "--bookmark" || arg === "--message") {
+    if (arg === "--cwd" || arg === "--bookmark") {
       const value = argv[++i];
       if (value === undefined) return { error: `${arg} requires a value` };
-      options[arg === "--cwd" ? "cwd" : arg === "--bookmark" ? "bookmark" : "message"] = value;
+      options[arg === "--cwd" ? "cwd" : "bookmark"] = value;
       continue;
     }
     if (arg.startsWith("--")) return { error: `unknown option ${arg}` };
@@ -66,9 +65,8 @@ export function parseArgs(argv) {
 function describe(result, cwd) {
   if (!result.synced) return `yukl vcs-sync: ${result.reason} in ${cwd}; nothing to publish`;
   const action = result.moved ? "published" : "already published";
-  const described = result.described ? "described and " : "";
   return (
-    `yukl vcs-sync: ${described}${action} ${result.commit.slice(0, 12)} ` +
+    `yukl vcs-sync: ${action} ${result.commit.slice(0, 12)} ` +
     `as ${result.ref} in ${result.jjRoot}`
   );
 }
@@ -85,9 +83,7 @@ export function run(argv = []) {
     return 2;
   }
   const cwd = resolve(parsed.cwd ?? process.cwd());
-  const options = { cwd, bookmark: parsed.bookmark };
-  if (parsed.message !== null) options.message = parsed.message;
-  const result = syncJjWorkingCopy(options);
+  const result = syncJjWorkingCopy({ cwd, bookmark: parsed.bookmark });
 
   if (parsed.json) {
     console.log(JSON.stringify(result));
