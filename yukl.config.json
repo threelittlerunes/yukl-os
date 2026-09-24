@@ -14,7 +14,7 @@
   "allowlist": ["npm run build", "npm run test"],
   "lifecycle": {
     "runtimes": {
-      "implement": { "adapter": "orca", "agent": "opencode" },
+      "implement": { "adapter": "orca", "agent": "omp" },
       "audit": { "adapter": "orca", "agent": "antigravity" },
       "review": { "adapter": "orca", "agent": "antigravity" }
     },

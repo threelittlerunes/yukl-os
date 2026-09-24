@@ -31,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rather than reclaimed (v3-unattended).
 
 ### Changed
+- Every drafting runtime routes to `omp`: `orca.yaml` `agents.drafter.agent`, the
+  `expert-power-drafter` stage in `flow.config.json` and
+  `yukl.config.json` `lifecycle.runtimes.implement.agent` (audit and review stay
+  on `antigravity`); `omp` joins `ALLOWED_AGENTS`, which keeps `opencode` so
+  other users of the harness can still choose it, and the test fixtures and
+  documentation examples follow the new routing (routing-omp).
 - Removed `maxTokensPerRun` everywhere (policy, validator, `run.js`, tests,
   docs): no adapter can measure tokens, so it must not exist as a setting and
   the policy schema now refuses any `budgets` key that is not a run limit. The

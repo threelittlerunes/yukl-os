@@ -45,7 +45,7 @@ async function withFake(dir, scenario, fn) {
 
   const runtime = createOrcaRuntime({
     orca: [process.execPath, FAKE],
-    agent: "opencode",
+    agent: "omp",
     baseBranch: "main",
     name: "test-worker",
   });
@@ -80,7 +80,7 @@ function shown(reply) {
 // ---------------------------------------------------------------------------
 
 test("the adapter implements the runtime interface", () => {
-  const runtime = createOrcaRuntime({ orca: "orca", agent: "opencode", baseBranch: "main" });
+  const runtime = createOrcaRuntime({ orca: "orca", agent: "omp", baseBranch: "main" });
   assert.equal(implementsRuntime(runtime), true);
   assert.equal(assertRuntime(runtime), runtime);
 });
@@ -116,7 +116,7 @@ test("start passes the plan's argument array to worker-start and returns the dis
           "--base-branch",
           "main",
           "--agent",
-          "opencode",
+          "omp",
           "--json",
         ]);
       },
