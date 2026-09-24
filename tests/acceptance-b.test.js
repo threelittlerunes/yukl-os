@@ -139,7 +139,7 @@ function policyDoc() {
     autonomy,
     ceiling: 1,
     limits: { maxAttemptsPerStage: ATTEMPT_LIMIT },
-    budgets: { maxWallMinutesPerRun: null, maxTokensPerRun: null, maxAgentStartsPerRun: null },
+    budgets: { maxWallMinutesPerRun: null, maxAgentStartsPerRun: null },
     trackRecord: { levels: [{ level: 1, minCleanRuns: 5 }] },
   };
 }
