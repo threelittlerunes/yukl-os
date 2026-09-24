@@ -266,8 +266,10 @@ function makeEnforce({ cwd, base, taskId }) {
  * without any error. The sync runs immediately before the start it guards, so
  * a long run that dispatches several stages publishes the state as it is at
  * each dispatch; a sync that cannot be proven refuses the dispatch (a worker
- * branching from an unknown state is the failure this exists to prevent).
- * `status`, `result` and `stop` stay on the wrapped runtime untouched.
+ * branching from an unknown state is the failure this exists to prevent). The
+ * sync publishes a ref and never edits `@`, so a work-in-progress commit the
+ * human left undescribed is handed over exactly as it is. `status`, `result`
+ * and `stop` stay on the wrapped runtime untouched.
  */
 export function withWorkingCopySync(runtime, { cwd, bookmark }) {
   const syncFirst = Object.create(runtime);

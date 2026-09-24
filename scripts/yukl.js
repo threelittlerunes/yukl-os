@@ -3,7 +3,7 @@
 //
 //   yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]
 //   yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]
-//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]
+//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]
 //   yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]
 //
 // The binding layer is deterministic checks, not prompts. `render` expands a
@@ -11,7 +11,8 @@
 // Orca or none); `verify` enforces the Rational Persuasion contract and is
 // designed to be the merge gate a CI job runs on pull requests; `vcs-sync`
 // publishes a colocated Jujutsu working copy into Git (`syncJjWorkingCopy`)
-// before a Git-only dispatcher branches a worker from a stale tip; `init`
+// without rewriting `@`, before a Git-only dispatcher branches a worker from a
+// stale tip; `init`
 // installs the harness into a target repository on a feature branch without
 // overwriting anything the repository already has.
 //
@@ -1168,9 +1169,6 @@ export function jjWorkingCopyOnDefaultBranch(cwd, defaultBranch) {
 /** The Git branch `yukl vcs-sync` publishes the Jujutsu working copy under. */
 export const JJ_WC_BOOKMARK = "yukl-wc";
 
-/** The message given to a working-copy commit that has no description yet. */
-export const JJ_WC_MESSAGE = "yukl vcs-sync: publish the Jujutsu working copy";
-
 const JJ_BOOKMARK_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
@@ -1258,22 +1256,12 @@ function jjCommitId(root, revset) {
   return /^[0-9a-f]{40}$/.test(id) ? id : null;
 }
 
-/** The description of `revset` (the working copy by default) at `root`, or null. */
-function jjDescription(root, revset = "@") {
-  const result = spawnSync(
-    "jj",
-    ["--repository", root, "log", "-r", revset, "--no-graph", "-T", "description"],
-    { encoding: "utf8" },
-  );
-  return result.status === 0 ? (result.stdout || "").trim() : null;
-}
-
 /**
  * True when the local bookmark `name` at `root` tracks a remote bookmark, so
  * the user published it elsewhere: moving it backwards would rewrite a ref
  * other people already see. `exact:` keeps the match to that one name. A jj
  * that cannot answer (the revset is unsupported) is reported as "no remote":
- * the description check below still guards what this command may move.
+ * the ownership check in syncJjWorkingCopy still guards what it may move.
  */
 function jjBookmarkTracksRemote(root, name) {
   const result = spawnSync(
@@ -1321,39 +1309,42 @@ function firstFailedLine(result) {
  * holds the uncommitted state - but in a colocated workspace that commit is
  * reachable only through Jujutsu's own bookmark machinery, and a Git-only
  * consumer (Orca branching a worker's worktree from a branch tip) never sees
- * it. This function closes that gap: describe `@` when it still has no
- * description, move the bookmark onto it (`--allow-backwards`, so the ref
- * tracks `@` in both directions), let Jujutsu export bookmarks into Git, and
- * then check with Git itself that the ref resolves to exactly the `@` commit
- * id. Only that last check makes a sync successful.
+ * it. This function closes that gap: move the bookmark onto `@`
+ * (`--allow-backwards`, so the ref tracks `@` in both directions), let Jujutsu
+ * export bookmarks into Git, and then check with Git itself that the ref
+ * resolves to exactly the `@` commit id. Only that last check makes a sync
+ * successful.
+ *
+ * The sync publishes a ref and never rewrites `@`. `@` may carry no
+ * description at all, and that emptiness is the author's: Jujutsu's own
+ * `jj git push` refuses a commit with no description, so describing `@` here
+ * would silently lift the guard standing between work in progress and a
+ * published branch. An undescribed `@` is published as-is (Git accepts an
+ * empty commit message), and a description that is already there is left
+ * byte-for-byte alone.
  *
  * A bookmark this function may move is one yukl owns, so a bookmark the user
  * owns is refused before anything is written (the bookmark stays where it is):
  *
- * - the default working-copy bookmark `yukl-wc`, whose ref Git already names -
- *   the previous published `@` - is yukl's own, whatever description `@`
- *   carries (the author's own message is never overwritten, and might mention
- *   nothing about yukl); or
- * - any other bookmark whose commit carries the yukl message, which is what a
- *   custom `--bookmark` name was published with before.
+ * - the default working-copy bookmark `yukl-wc` is yukl's own namespace, and it
+ *   is movable whether Git already names it - the previous published `@` - or
+ *   has no ref of that name yet; or
+ * - any other bookmark that already points at `@`, in which case moving it is a
+ *   no-op that only republishes the state Git is missing ("already published").
  *
- * Everything else - `main`, say - is a branch the user owns: it is refused when
- * it tracks a remote (moving it would rewrite what others see) or when its
- * commit is described with something else (or not at all), because
- * `--allow-backwards` would then drag a real branch back onto `@`.
+ * Everything else - `main` behind `@`, say - is a branch the user owns: it is
+ * refused when it tracks a remote (moving it would rewrite what others see) and
+ * refused when it does not already point at `@`, because `--allow-backwards`
+ * would then drag a real branch onto the working copy.
  *
  * Returns `{ ok: true, synced: false, reason }` when `cwd` holds no Jujutsu
  * workspace (nothing to publish, and not an error), `{ ok: false, error }`
  * when a workspace exists but cannot be published, or
- * `{ ok: true, synced: true, jjRoot, bookmark, ref, commit, described, moved }`.
+ * `{ ok: true, synced: true, jjRoot, bookmark, ref, commit, moved }`.
  * Files Jujutsu ignores are not part of the snapshot, exactly as they are not
  * part of the working copy it tracks.
  */
-export function syncJjWorkingCopy({
-  cwd = process.cwd(),
-  bookmark = JJ_WC_BOOKMARK,
-  message = JJ_WC_MESSAGE,
-} = {}) {
+export function syncJjWorkingCopy({ cwd = process.cwd(), bookmark = JJ_WC_BOOKMARK } = {}) {
   if (!isJjBookmarkName(bookmark)) {
     return { ok: false, error: `"${bookmark}" is not a valid Jujutsu bookmark name` };
   }
@@ -1372,53 +1363,37 @@ export function syncJjWorkingCopy({
   const before = git(["rev-parse", "--verify", "--quiet", ref], root);
   const wasAt = before.status === 0 ? (before.stdout || "").trim() : null;
 
-  // The refusal comes before every write: a bookmark the user owns must not be
-  // described, moved or exported by this function.
+  // A bookmark someone else owns is refused before every write: a
+  // remote-tracking bookmark is refused outright, because moving it would
+  // rewrite a ref other people already see.
   const existing = jjCommitId(root, bookmark);
-  if (existing !== null) {
-    if (jjBookmarkTracksRemote(root, bookmark)) {
-      return {
-        ok: false,
-        error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
-      };
-    }
-    // `yukl-wc` is yukl's own ref: Git already naming it is the previous
-    // published @, so it is movable whatever `@` is described with.
-    const owned = bookmark === JJ_WC_BOOKMARK && wasAt !== null;
-    const bookmarkDescription = jjDescription(root, bookmark);
-    if (!owned && bookmarkDescription !== message) {
-      const why =
-        bookmarkDescription === null
-          ? "its commit cannot be read"
-          : `its commit carries the description "${firstLine(bookmarkDescription)}"`;
-      return {
-        ok: false,
-        error:
-          `refusing to move the existing bookmark ${bookmark} in ${root}: ${why}, ` +
-          "which is not a yukl working-copy publication",
-      };
-    }
+  if (existing !== null && jjBookmarkTracksRemote(root, bookmark)) {
+    return {
+      ok: false,
+      error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
+    };
   }
 
-  const description = jjDescription(root);
-  if (description === null) {
-    return { ok: false, error: `cannot read the working-copy description in ${root}` };
-  }
-  let described = false;
-  if (description === "") {
-    const describe = spawnSync("jj", ["--repository", root, "describe", "-m", message], {
-      encoding: "utf8",
-    });
-    if (describe.status !== 0) {
-      return { ok: false, error: `jj describe failed: ${failedLine(describe)}` };
-    }
-    described = true;
-  }
-
-  // describe rewrites the working-copy commit, so its id is read afterwards.
+  // The working copy is read once and never rewritten: the sync publishes a
+  // ref, so `@` is exactly the commit that gets published, whatever - or
+  // nothing - its description holds.
   const commit = jjCommitId(root, "@");
   if (commit === null) {
     return { ok: false, error: `cannot resolve the Jujutsu working copy (@) in ${root}` };
+  }
+
+  // `yukl-wc` is yukl's own namespace - Git naming it is the previous published
+  // `@`, and Git naming nothing yet is a first publication - so it is always
+  // movable. Another bookmark may only be moved when it would not move at all:
+  // it already points at `@`, and the sync merely republishes what Git misses.
+  if (existing !== null && bookmark !== JJ_WC_BOOKMARK && existing !== commit) {
+    return {
+      ok: false,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: it is not the yukl ` +
+        `working-copy bookmark ${JJ_WC_BOOKMARK} and does not already point at the working ` +
+        `copy (@) ${commit.slice(0, 12)}`,
+    };
   }
 
   const set = spawnSync(
@@ -1453,7 +1428,6 @@ export function syncJjWorkingCopy({
     bookmark,
     ref,
     commit,
-    described,
     moved: wasAt !== commit,
   };
 }
@@ -1855,7 +1829,7 @@ const USAGE = [
   "usage:",
   "  yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]",
   "  yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]",
-  "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--message <text>] [--json]",
+  "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]",
   "  yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]",
   "            [--project-dir <rel>]... [--command <key>=<cmd>]...",
 ].join("\n");

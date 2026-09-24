@@ -9,7 +9,6 @@ import { withWorkingCopySync } from "../scripts/commands/run.js";
 import { parseArgs, run } from "../scripts/commands/vcs-sync.js";
 import {
   JJ_WC_BOOKMARK,
-  JJ_WC_MESSAGE,
   isJjBookmarkName,
   jjWorkspaceRoot,
   syncJjWorkingCopy,
@@ -133,7 +132,6 @@ test("vcs-sync parseArgs defaults to the working-copy bookmark and no cwd", () =
   assert.deepEqual(parseArgs([]), {
     cwd: null,
     bookmark: JJ_WC_BOOKMARK,
-    message: null,
     json: false,
   });
 });
@@ -142,30 +140,26 @@ test("vcs-sync parseArgs reads --json and every value flag", () => {
   assert.deepEqual(parseArgs(["--json"]), {
     cwd: null,
     bookmark: JJ_WC_BOOKMARK,
-    message: null,
     json: true,
   });
   assert.equal(parseArgs(["--cwd", "some/dir"]).cwd, "some/dir");
   assert.equal(parseArgs(["--bookmark", "feature/sync"]).bookmark, "feature/sync");
-  assert.equal(
-    parseArgs(["--message", "publish the working copy"]).message,
-    "publish the working copy",
-  );
-  assert.deepEqual(parseArgs(["--cwd", "d", "--bookmark", "b", "--message", "m", "--json"]), {
+  assert.deepEqual(parseArgs(["--cwd", "d", "--bookmark", "b", "--json"]), {
     cwd: "d",
     bookmark: "b",
-    message: "m",
     json: true,
   });
 });
 
 test("vcs-sync parseArgs refuses a missing value, an unknown flag, a stray positional and a bad bookmark", () => {
   // Every case returns an error object, so no caller ever reaches a jj spawn.
-  for (const flag of ["--cwd", "--bookmark", "--message"]) {
+  for (const flag of ["--cwd", "--bookmark"]) {
     assert.deepEqual(parseArgs([flag]), { error: `${flag} requires a value` });
     assert.deepEqual(parseArgs(["--json", flag]), { error: `${flag} requires a value` });
   }
   assert.deepEqual(parseArgs(["--bogus"]), { error: "unknown option --bogus" });
+  // The sync never describes `@`, so it takes no message to describe it with.
+  assert.deepEqual(parseArgs(["--message", "publish"]), { error: "unknown option --message" });
   assert.deepEqual(parseArgs(["publish"]), { error: 'unexpected argument "publish"' });
   assert.deepEqual(parseArgs(["--bookmark", "bad..name"]), {
     error: '--bookmark "bad..name" is not a valid bookmark name',
@@ -178,6 +172,7 @@ test("vcs-sync parseArgs refuses a missing value, an unknown flag, a stray posit
 test("vcs-sync run returns 2 with usage on every argument error", async () => {
   const cases = [
     [["--bogus"], /unknown option --bogus/],
+    [["--message", "m"], /unknown option --message/],
     [["publish"], /unexpected argument "publish"/],
     [["--cwd"], /--cwd requires a value/],
     [["--bookmark", "bad..name"], /is not a valid bookmark name/],
@@ -447,7 +442,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "syncJjWorkingCopy describes an undescribed working copy and points the Git branch at it",
+  "syncJjWorkingCopy publishes an undescribed working copy and points the Git branch at it",
   { skip: JJ_SKIP },
   async () => {
     await withTempDir(async (dir) => {
@@ -460,7 +455,6 @@ test(
       const result = syncJjWorkingCopy({ cwd: dir });
       assert.equal(result.ok, true, result.error);
       assert.equal(result.synced, true);
-      assert.equal(result.described, true, "an undescribed @ is described");
       assert.equal(result.moved, true, "the bookmark did not exist before");
       assert.equal(result.bookmark, JJ_WC_BOOKMARK);
       assert.equal(result.ref, `refs/heads/${JJ_WC_BOOKMARK}`);
@@ -470,7 +464,8 @@ test(
       assert.equal(result.commit, at);
       assert.equal(
         jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
-        JJ_WC_MESSAGE,
+        "",
+        "an undescribed @ is published as it is, never described",
       );
       assert.equal(
         gitOut(["rev-parse", `refs/heads/${JJ_WC_BOOKMARK}`], dir),
@@ -482,30 +477,35 @@ test(
       const again = await capture(() => run(["--cwd", dir]));
       assert.equal(again.code, 0, again.err);
       assert.match(again.out, /already published/);
-      assert.ok(!/described and/.test(again.out), "the working copy is already described");
+      assert.ok(!/described/.test(again.out), "the sync never reports a description");
     });
   },
 );
 
 test(
-  "syncJjWorkingCopy never overwrites a description the working copy already has",
+  "syncJjWorkingCopy leaves an existing description byte-for-byte unchanged",
   { skip: JJ_SKIP },
   async () => {
     await withTempDir(async (dir) => {
       colocatedRepo(dir);
       writeFileSync(join(dir, "README.md"), "base\n");
-      jj(dir, ["describe", "-m", "base"]);
+      jj(dir, ["describe", "-m", "base\n\nsecond line"]);
       mkdirSync(join(dir, "src"), { recursive: true });
       writeFileSync(join(dir, "src", "x.js"), "x\n");
 
+      const rawDescription = () => jj(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]);
+      const descriptionBefore = rawDescription().stdout;
+      assert.match(descriptionBefore, /second line/);
+      const commitBefore = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+
       const result = syncJjWorkingCopy({ cwd: dir });
       assert.equal(result.ok, true, result.error);
-      assert.equal(result.described, false, "an existing description is left alone");
       assert.equal(result.moved, true, "the ref is created on this first run");
+      assert.equal(result.commit, commitBefore, "the sync publishes @ without rewriting it");
       assert.equal(
-        jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
-        "base",
-        "the author's description survives the sync",
+        rawDescription().stdout,
+        descriptionBefore,
+        "the author's description survives the sync untouched",
       );
       assert.equal(
         gitOut(["rev-parse", `refs/heads/${JJ_WC_BOOKMARK}`], dir),
@@ -515,10 +515,9 @@ test(
 
       const second = syncJjWorkingCopy({ cwd: dir });
       assert.equal(second.ok, true, second.error);
-      assert.equal(second.described, false);
       assert.equal(second.moved, false, "the ref already names @");
       assert.equal(second.commit, result.commit);
-      assert.equal(jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]), "base");
+      assert.equal(rawDescription().stdout, descriptionBefore);
     });
   },
 );
@@ -552,10 +551,10 @@ test(
       const second = syncJjWorkingCopy({ cwd: dir });
       assert.equal(second.ok, true, second.error);
       assert.equal(second.moved, true, "the bookmark is moved onto @");
-      assert.equal(second.described, true, "the new @ is described");
-      // Describing rewrites the commit, so the published commit is read back.
+      // The sync never describes @, so the published commit is the very one
+      // that was read before the move.
       const now = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
-      assert.notEqual(now, ahead, "describing rewrites the working-copy commit");
+      assert.equal(now, ahead, "an undescribed @ is published without being rewritten");
       assert.equal(second.commit, now);
       assert.equal(gitOut(["rev-parse", `refs/heads/${JJ_WC_BOOKMARK}`], dir), now);
       assert.equal(
@@ -567,47 +566,81 @@ test(
   },
 );
 
-test("syncJjWorkingCopy refuses to move a bookmark the user owns", { skip: JJ_SKIP }, async () => {
-  await withTempDir(async (dir) => {
-    colocatedRepo(dir);
-    writeFileSync(join(dir, "README.md"), "base\n");
-    jj(dir, ["describe", "-m", "base"]);
-    jj(dir, ["bookmark", "create", "main", "-r", "@"]);
-    const main = jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]);
-    // The user keeps working, so @ moves ahead of the branch they own.
-    jj(dir, ["new"]);
-    jj(dir, ["describe", "-m", ""]);
-    const workingCopy = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
-    assert.notEqual(workingCopy, main, "main is behind @");
+test(
+  "syncJjWorkingCopy accepts a custom bookmark that already points at the working copy",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      colocatedRepo(dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      jj(dir, ["bookmark", "create", "mine", "-r", "@"]);
+      const commit = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
 
-    const refused = syncJjWorkingCopy({ cwd: dir, bookmark: "main" });
-    assert.equal(refused.ok, false, "a user bookmark is never moved");
-    assert.match(refused.error, /refusing to move the existing bookmark main/);
-    assert.match(refused.error, /carries the description "base"/);
-    assert.match(refused.error, /not a yukl working-copy publication/);
+      const result = syncJjWorkingCopy({ cwd: dir, bookmark: "mine" });
+      assert.equal(result.ok, true, result.error);
+      assert.equal(result.commit, commit);
+      assert.equal(gitOut(["rev-parse", "refs/heads/mine"], dir), commit, "Git now names @ too");
+      assert.equal(jjOut(dir, ["log", "-r", "mine", "--no-graph", "-T", "commit_id"]), commit);
+      assert.equal(
+        jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
+        "",
+        "the working copy is still undescribed",
+      );
 
-    // The refusal writes nothing at all: the branch, its Git ref and the
-    // working copy are exactly where the user left them.
-    assert.equal(jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]), main);
-    assert.equal(gitOut(["rev-parse", "refs/heads/main"], dir), main);
-    assert.equal(jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]), workingCopy);
-    assert.equal(
-      jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
-      "",
-      "the working copy is not described either",
-    );
-    assert.equal(
-      jjOut(dir, ["bookmark", "list", JJ_WC_BOOKMARK, "-T", "name"]),
-      "",
-      "the sync created no working-copy bookmark of its own",
-    );
+      // Moving a bookmark that already points at @ is a no-op, not a refusal.
+      const second = syncJjWorkingCopy({ cwd: dir, bookmark: "mine" });
+      assert.equal(second.ok, true, second.error);
+      assert.equal(second.moved, false, "Git already names @: nothing left to do");
+      assert.equal(second.commit, commit);
+    });
+  },
+);
 
-    // The command reports the refusal as exit 1 rather than publishing.
-    const cli = runCli(["vcs-sync", "--cwd", dir, "--bookmark", "main"]);
-    assert.equal(cli.status, 1, cli.stdout);
-    assert.match(cli.stderr, /refusing to move the existing bookmark main/);
-  });
-});
+test(
+  "syncJjWorkingCopy refuses a custom bookmark that does not point at the working copy",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      colocatedRepo(dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      jj(dir, ["describe", "-m", "base"]);
+      jj(dir, ["bookmark", "create", "main", "-r", "@"]);
+      const main = jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]);
+      // The user keeps working, so @ moves ahead of the branch they own.
+      jj(dir, ["new"]);
+      jj(dir, ["describe", "-m", ""]);
+      const workingCopy = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+      assert.notEqual(workingCopy, main, "main is behind @");
+
+      const refused = syncJjWorkingCopy({ cwd: dir, bookmark: "main" });
+      assert.equal(refused.ok, false, "a user bookmark is never moved");
+      assert.match(refused.error, /refusing to move the existing bookmark main/);
+      assert.match(refused.error, /it is not the yukl working-copy bookmark yukl-wc/);
+      assert.match(refused.error, /does not already point at the working copy \(@\)/);
+
+      // The refusal writes nothing at all: the branch, its Git ref and the
+      // working copy are exactly where the user left them.
+      assert.equal(jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]), main);
+      assert.equal(gitOut(["rev-parse", "refs/heads/main"], dir), main);
+      assert.equal(jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]), workingCopy);
+      assert.equal(
+        jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
+        "",
+        "the working copy is not described either",
+      );
+      assert.equal(
+        jjOut(dir, ["bookmark", "list", JJ_WC_BOOKMARK, "-T", "name"]),
+        "",
+        "the sync created no working-copy bookmark of its own",
+      );
+
+      // The command reports the refusal as exit 1 rather than publishing.
+      const cli = runCli(["vcs-sync", "--cwd", dir, "--bookmark", "main"]);
+      assert.equal(cli.status, 1, cli.stdout);
+      assert.match(cli.stderr, /refusing to move the existing bookmark main/);
+    });
+  },
+);
 
 test(
   "syncJjWorkingCopy refuses to move a bookmark that tracks a remote",
