@@ -26,7 +26,7 @@
       "id": "expert-power-drafter",
       "title": "Expert Power (Isolated Implementation)",
       "enabled": true,
-      "agent": "opencode",
+      "agent": "omp",
       "writes": ".orchestration/contracts/<task_id>.json",
       "reads": ["legitimate-power-router"],
       "onFailGoto": null,
