@@ -11,9 +11,19 @@
 //
 // A lock whose recorded process is gone is stale - the owner crashed or was
 // killed before it could release - and a later acquirer reclaims it instead of
-// blocking forever. Nothing is taken on trust beyond that: a lock file that
-// cannot be parsed is refused, not reclaimed, because the broker cannot prove
-// that its owner is gone and guessing would hand out a lock someone may hold.
+// blocking forever. Reclaiming is not atomic with the inspection that found the
+// owner dead, so it goes through a second, exclusive guard file
+// `<name>.lock.reclaim`: only the guard holder may remove the stale lock, and
+// it re-reads the lock first and removes it only while it still names the same
+// dead owner. Without that guard two acquirers could both see the dead owner,
+// both remove, and the later rmSync would delete the lock the earlier one had
+// just created - leaving two holders of one lock.
+//
+// Nothing is taken on trust beyond that: a lock file that cannot be parsed is
+// refused, not reclaimed, because the broker cannot prove that its owner is
+// gone and guessing would hand out a lock someone may hold. The guard records
+// its owner like any lock, so a reclaimer that crashed mid-reclaim leaves a
+// stale guard the next acquirer reclaims in turn.
 //
 // The clock, the process id, the host name and the liveness check are all
 // injectable, so the behaviour is testable without a real process, a real clock
@@ -25,6 +35,10 @@ import { join } from "node:path";
 
 /** The suffix every lock file carries. */
 export const LOCK_SUFFIX = ".lock";
+
+// The suffix of the exclusive guard that serialises reclaiming a stale lock, so
+// the guard of `a.lock` is `a.lock.reclaim`.
+const RECLAIM_SUFFIX = ".reclaim";
 
 // A lock name names a file, so it is restricted to one safe path segment, the
 // same shape the task ids and log files enforce.
@@ -83,7 +97,14 @@ function isOwner(owner) {
  * reclaims it could steal a lock another process is holding.
  */
 export function inspectLock(dir, name) {
-  const path = lockPath(dir, name);
+  return inspectPath(lockPath(dir, name));
+}
+
+/**
+ * Inspect one lock file, whichever file it is: the lock itself or the reclaim
+ * guard beside it. Same shapes as `inspectLock`.
+ */
+function inspectPath(path) {
   let text;
   try {
     text = readFileSync(path, "utf8");
@@ -103,6 +124,26 @@ export function inspectLock(dir, name) {
   return { state: "held", owner, path };
 }
 
+/**
+ * Absolute path of the reclaim guard for lock `name`: the exclusive lock that
+ * serialises reclaiming a stale `<name>.lock`. It records its owner like any
+ * lock file, so a reclaimer that crashed mid-reclaim leaves a stale guard that
+ * a later acquirer reclaims in turn.
+ */
+export function reclaimPath(dir, name) {
+  return `${lockPath(dir, name)}${RECLAIM_SUFFIX}`;
+}
+
+/** True when two owner records name the same process at the same moment. */
+function sameOwner(left, right) {
+  return (
+    left.name === right.name &&
+    left.pid === right.pid &&
+    left.host === right.host &&
+    left.at === right.at
+  );
+}
+
 /** Create the lock file exclusively. Never overwrites an existing lock. */
 function createExclusive(path, owner) {
   try {
@@ -115,17 +156,65 @@ function createExclusive(path, owner) {
 }
 
 /**
+ * Take the reclaim guard `guardPath` - the exclusive lock that lets exactly one
+ * acquirer reclaim a stale lock. Returns `{ ok: true }` when the guard is ours,
+ * `{ ok: false, reason: "busy", holder }` when a live reclaimer holds it,
+ * `{ ok: false, reason: "unreadable", detail }` when the guard exists but
+ * cannot be judged, and `{ ok: false, reason: "error", detail }` when it could
+ * not be created. A guard whose recorded process is dead - a reclaimer that
+ * crashed mid-reclaim - is stale and is removed so the reclaim can proceed.
+ */
+function takeReclaimGuard({ guardPath, owner, alive }) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const created = createExclusive(guardPath, owner);
+    if (created.ok) return { ok: true };
+    if (created.exists !== true) return { ok: false, reason: "error", detail: created.detail };
+
+    const current = inspectPath(guardPath);
+    if (current.state === "absent") continue;
+    if (current.state === "unreadable") {
+      return {
+        ok: false,
+        reason: "unreadable",
+        detail: `reclaim guard ${guardPath} cannot be read: ${current.detail}`,
+      };
+    }
+    if (alive(current.owner.pid)) return { ok: false, reason: "busy", holder: current.owner };
+    rmSync(guardPath, { force: true });
+  }
+  return {
+    ok: false,
+    reason: "error",
+    detail: "the reclaim guard changed hands on every attempt",
+  };
+}
+
+/** Remove the reclaim guard, but only while it still names us as its owner. */
+function releaseReclaimGuard(guardPath, owner) {
+  const current = inspectPath(guardPath);
+  if (current.state === "held" && sameOwner(current.owner, owner)) {
+    rmSync(guardPath, { force: true });
+  }
+}
+
+/**
  * Acquire the lock `name` in `dir`. Returns one of:
  *   `{ ok: true, path, owner, reclaimed, holder? }` - the lock is ours;
  *     `reclaimed` is true when a stale lock was removed first, and `holder` is
  *     the dead owner whose lock was reclaimed.
- *   `{ ok: false, reason: "held", path, holder }` - a live owner holds it.
+ *   `{ ok: false, reason: "held", path, holder }` - a live owner holds it, or
+ *     another acquirer is reclaiming it right now (the holder named is then the
+ *     live reclaimer that holds the reclaim guard).
  *   `{ ok: false, reason: "unreadable", path, detail }` - the lock file exists
  *     but cannot be judged, so it is left alone.
  *   `{ ok: false, reason: "error", path, detail }` - the file could not be
  *     created.
  * The lock directory is created when it is missing, so a fresh checkout needs
- * no setup step.
+ * no setup step. `beforeReclaim` is an injected hook called with
+ * `{ phase, path, guardPath, owner }` while this acquirer holds the reclaim
+ * guard: `phase: "inspect"` just before it re-reads the stale lock and
+ * `phase: "remove"` just before it removes it. The race tests drive a second
+ * acquirer or a lock that changes hands from inside those hooks.
  */
 export function acquireLock({
   dir,
@@ -135,8 +224,10 @@ export function acquireLock({
   host = hostname(),
   clock = () => new Date(),
   alive = isProcessAlive,
+  beforeReclaim = null,
 } = {}) {
   const path = lockPath(dir, name);
+  const guardPath = reclaimPath(dir, name);
   mkdirSync(dir, { recursive: true });
   const owner = { name, pid, host, task, at: clock().toISOString() };
 
@@ -157,12 +248,40 @@ export function acquireLock({
     if (alive(current.owner.pid)) {
       return { ok: false, reason: "held", path, holder: current.owner };
     }
-    // The owner is gone: reclaim. A concurrent acquirer may win the next
-    // exclusive create, in which case the loop inspects the new owner.
-    rmSync(path, { force: true });
-    const reclaimed = createExclusive(path, owner);
-    if (reclaimed.ok) {
-      return { ok: true, path, owner, reclaimed: true, holder: current.owner };
+    // The owner is gone. Removing its lock is not atomic with the inspection
+    // above: two acquirers that both saw the dead owner would both remove, and
+    // the later rmSync would delete the lock the earlier one had just created,
+    // so both would hold it. Reclaim under the exclusive guard instead - only
+    // the guard holder may remove - and re-read the lock under the guard, so
+    // the removal happens only while the lock still names the same dead owner.
+    const guard = takeReclaimGuard({ guardPath, owner, alive });
+    if (!guard.ok) {
+      if (guard.reason === "busy") {
+        return { ok: false, reason: "held", path, holder: guard.holder };
+      }
+      return { ok: false, reason: guard.reason, path, detail: guard.detail };
+    }
+    try {
+      if (typeof beforeReclaim === "function") {
+        beforeReclaim({ phase: "inspect", path, guardPath, owner: current.owner });
+      }
+      const again = inspectLock(dir, name);
+      const stillStale =
+        again.state === "held" && sameOwner(again.owner, current.owner) && !alive(again.owner.pid);
+      if (stillStale) {
+        if (typeof beforeReclaim === "function") {
+          beforeReclaim({ phase: "remove", path, guardPath, owner: current.owner });
+        }
+        rmSync(path, { force: true });
+        const reclaimed = createExclusive(path, owner);
+        if (reclaimed.ok) {
+          return { ok: true, path, owner, reclaimed: true, holder: current.owner };
+        }
+        // Another acquirer recreated the lock under us: the next attempt
+        // inspects it and reports its live owner.
+      }
+    } finally {
+      releaseReclaimGuard(guardPath, owner);
     }
   }
 

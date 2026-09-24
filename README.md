@@ -26,11 +26,11 @@ An agent receives only the rule files matching the paths it is allowed to touch,
 
 ### Unattended runs and run limits
 <!-- status: implemented tests=tests/command-run.test.js#an unattended run stops on a breached agent-start limit and records it -->
-`yukl run <task_id> --unattended` keeps driving one task until it is terminal, needs a human, escalates or breaches a run limit, waiting for running stages instead of stopping on them. The two run limits (`maxWallMinutesPerRun`, `maxAgentStartsPerRun`) are enforced: a breach appends an `enforcement` event and stops the run.
+`yukl run <task_id> --unattended` keeps driving one task until it is terminal, needs a human, escalates or breaches a run limit, waiting for running stages instead of stopping on them. The two run limits (`maxWallMinutesPerRun`, `maxAgentStartsPerRun`) are enforced: a breach appends an `enforcement` event and stops the run. They bound every run, attended or unattended - an attended run stops on a breach too - and `--unattended` changes only how the loop behaves between steps and is refused while a limit is unset.
 
 ### Parallel scheduling and advisory locks
 <!-- status: implemented tests=tests/command-schedule.test.js#schedule runs a wave concurrently and starts the next wave only after it settles -->
-`yukl schedule` drives several tasks unattended, each in its own Git worktree: tasks whose `allowed_paths` do not overlap run in parallel and overlapping ones are serialised, with a `.orchestration/locks/` advisory lock per task so no two schedulers drive the same task.
+`yukl schedule` drives several tasks unattended, each in its own Git worktree: tasks whose `allowed_paths` do not overlap run in parallel and overlapping ones are serialised, with a `.orchestration/locks/` advisory lock per task so no two schedulers drive the same task. With `--base` each task's intent is read from that ref through `git show`, so a task branch cannot widen its own scope; without it the working tree is a local preview.
 
 ## Planned features
 <!-- status: planned -->
@@ -114,16 +114,24 @@ in a hash-chained log:
   escalates or finishes. `--once` takes a single step. `--unattended` waits for
   a running stage instead of stopping on it and keeps driving the task until it
   is terminal, needs a human, escalates or breaches a run limit; it is refused
-  unless both run limits in `yukl.policy.json` are positive integers.
+  unless both run limits in `yukl.policy.json` are positive integers. The two
+  limits bound an attended run in the same way - a breach appends the same
+  `enforcement` event and stops the run - so `--unattended` changes only how the
+  loop behaves between steps.
 - `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended,
   each in its own worktree under `.orchestration/worktrees/`. Tasks whose
   intents' `allowed_paths` cannot overlap run in the same wave, in parallel;
   overlapping ones are serialised into later waves. Each task takes a
-  `.orchestration/locks/<task_id>.lock` advisory lock while it runs.
+  `.orchestration/locks/<task_id>.lock` advisory lock while it runs. With
+  `--base` every task's intent is read from that ref through `git show`, so a
+  task branch cannot widen the scope it is scheduled from; without `--base` the
+  working tree is read, which makes local mode a developer preview rather than a
+  trust boundary.
 - `yukl lock <hold|status|release> <name> [--task <id>] [-- <command>]` is the
   advisory lock broker: `hold` acquires the lock, runs the command and releases
   it however the command ends, and a lock whose recorded process is gone is
-  reclaimed by the next acquirer.
+  reclaimed by the next acquirer under an exclusive `<name>.lock.reclaim`
+  guard, so two acquirers can never both hold it.
 - `yukl status <task_id> [--state-dir <dir>] [--base <ref>]` folds the log to
   its state, prints the last decision, verifies the hash chain and checks the
   log against the newest `Yukl-Run-Head` trailer on the base branch.

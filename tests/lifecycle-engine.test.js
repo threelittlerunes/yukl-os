@@ -681,6 +681,25 @@ function tickingDeps(dir, runtime, state) {
   });
 }
 
+/**
+ * A fake sleep for the unattended loop that fails the test instead of hanging.
+ * A poll of an unsettled stage resolves as a microtask, so a regression that
+ * leaves the loop with no exit - a run limit that never fires - spins without
+ * ever yielding to the event loop, and the runner's own timeout (a timer in the
+ * same process) can never fire. Throwing after a generous number of polls turns
+ * that hang into a fast failure; these tests poll a handful of times.
+ */
+function boundedSleep(onPoll, maxPolls = 1000) {
+  let polls = 0;
+  return async () => {
+    polls += 1;
+    if (polls > maxPolls) {
+      throw new Error(`the unattended loop polled ${maxPolls} times without stopping`);
+    }
+    onPoll(polls);
+  };
+}
+
 test("an unattended run waits for a running stage and never restarts it", async () => {
   await withTempDir(async (dir) => {
     const taskId = "task-unattended-wait";
@@ -703,10 +722,10 @@ test("an unattended run waits for a running stage and never restarts it", async 
       unattended: true,
       limits: { maxWallMinutesPerRun: 30, maxAgentStartsPerRun: 20 },
       pollIntervalMs: 5,
-      sleep: async () => {
+      sleep: boundedSleep(() => {
         state.minutes += 1;
         slept.push(state.minutes);
-      },
+      }),
     });
 
     assert.equal(result.status, "terminal");
@@ -749,9 +768,9 @@ test("an unattended run stops when its wall-clock limit is breached while it wai
       unattended: true,
       limits: { maxWallMinutesPerRun: 10, maxAgentStartsPerRun: 50 },
       pollIntervalMs: 5,
-      sleep: async () => {
+      sleep: boundedSleep(() => {
         state.minutes += 5;
-      },
+      }),
     });
 
     assert.equal(result.status, "limit");
@@ -784,7 +803,7 @@ test("an unattended run refuses to start the agent that would exceed its start l
       deps,
       unattended: true,
       limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 },
-      sleep: async () => {},
+      sleep: boundedSleep(() => {}),
     });
 
     assert.equal(result.status, "limit");
@@ -831,7 +850,7 @@ test("the agent-start limit counts this run's starts, not the log's history", as
       deps,
       unattended: true,
       limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 2 },
-      sleep: async () => {},
+      sleep: boundedSleep(() => {}),
     });
 
     assert.equal(result.status, "limit");
@@ -864,11 +883,44 @@ test("the step cap bounds an attended run and not an unattended one", async () =
       maxSteps: 1,
       unattended: true,
       limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 20 },
-      sleep: async () => {},
+      sleep: boundedSleep(() => {}),
     });
     assert.equal(unattended.status, "terminal");
     assert.equal(unattended.stage, "done");
     assert.ok(unattended.steps.length > 1, "the step cap does not bound an unattended run");
+  });
+});
+
+test("a run limit bounds an attended run too, not only an unattended one", async () => {
+  await withTempDir(async (dir) => {
+    const limits = { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 };
+    const deps = makeDeps(dir, { runtime: () => settledRuntime() });
+    const stopped = await runUntilBlocked({
+      taskId: "task-attended-limit",
+      deps,
+      maxSteps: 64,
+      limits,
+    });
+
+    assert.equal(stopped.status, "limit", "an attended run stops on the same limit");
+    assert.equal(stopped.rule, RUN_LIMIT_RULE);
+    assert.deepEqual(stopped.limit, { name: RUN_LIMITS.STARTS, max: 1, observed: 1 });
+    assert.ok(stopped.steps.length < 64, "the limit stopped it, not the step cap");
+    const events = readEvents(dir, "task-attended-limit").events;
+    assert.equal(
+      events.filter((event) => event.type === "enforcement").length,
+      1,
+      "an attended breach is recorded like an unattended one",
+    );
+
+    // The same run without limits drives the task to its terminal stage, so the
+    // stop above is the limit and not the lifecycle's own end.
+    const unbounded = await runUntilBlocked({
+      taskId: "task-attended-nolimit",
+      deps,
+      maxSteps: 64,
+    });
+    assert.equal(unbounded.status, "terminal");
   });
 });
 

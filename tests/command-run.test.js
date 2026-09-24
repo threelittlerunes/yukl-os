@@ -112,6 +112,46 @@ function committedPolicy() {
   return JSON.parse(readFileSync(join(ROOT, "yukl.policy.json"), "utf8"));
 }
 
+/**
+ * A fake sleep for the unattended loop that fails the test instead of hanging.
+ * A poll of an unsettled stage resolves as a microtask, so a regression that
+ * leaves the loop with no exit - a run limit that never fires - spins without
+ * ever yielding to the event loop, and the runner's own timeout (a timer in the
+ * same process) can never fire. Throwing after a generous number of polls turns
+ * that hang into a fast failure; the tests themselves poll a handful of times.
+ */
+function boundedSleep(onPoll, maxPolls = 1000) {
+  let polls = 0;
+  return async () => {
+    polls += 1;
+    if (polls > maxPolls) {
+      throw new Error(`the unattended loop polled ${maxPolls} times without stopping`);
+    }
+    onPoll(polls);
+  };
+}
+
+/**
+ * Wrap a stub runtime so a regression that leaves the run with no exit fails the
+ * test instead of restarting the stage forever. The failure path appends no
+ * sleep, so an unattended run that keeps restarting a failing stage never yields
+ * to the event loop, and no timer (not even the runner's own timeout) can end
+ * it. A correct run in these tests starts a couple of agents at most.
+ */
+function boundedStarts(runtime, maxStarts = 50) {
+  let starts = 0;
+  return {
+    ...runtime,
+    start(input) {
+      starts += 1;
+      if (starts > maxStarts) {
+        throw new Error(`the run started ${maxStarts} agents without stopping`);
+      }
+      return runtime.start(input);
+    },
+  };
+}
+
 /** The committed policy with every run limit unset. */
 function unboundedPolicy() {
   const policy = committedPolicy();
@@ -415,9 +455,9 @@ test("the committed policy passes the unattended preflight and reaches the adapt
         // to keep the test quick; only `implement` has a runtime in this repo,
         // so the run would otherwise wait at the `prove` gate.
         clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + minutes * 60_000),
-        sleep: async () => {
+        sleep: boundedSleep(() => {
           minutes += 120;
-        },
+        }),
         createRuntime: () => {
           created += 1;
           return {
@@ -461,18 +501,19 @@ test("an unattended run stops on a breached agent-start limit and records it", a
     const { code, out } = await capture(() =>
       run([TASK, "--unattended", "--cwd", dir], {
         clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + minutes * 60_000),
-        sleep: async () => {
+        sleep: boundedSleep(() => {
           minutes += 1;
-        },
-        createRuntime: () => ({
-          start: (dispatch) => {
-            starts.push(dispatch.stage);
-            return `fake-${starts.length}`;
-          },
-          status: () => "exited",
-          result: () => ({ exitCode: 1 }),
-          stop: () => {},
         }),
+        createRuntime: () =>
+          boundedStarts({
+            start: (dispatch) => {
+              starts.push(dispatch.stage);
+              return `fake-${starts.length}`;
+            },
+            status: () => "exited",
+            result: () => ({ exitCode: 1 }),
+            stop: () => {},
+          }),
       }),
     );
 
@@ -513,10 +554,10 @@ test("an unattended run stops when its wall-clock limit is breached while waitin
     const { code, out } = await capture(() =>
       run([TASK, "--unattended", "--cwd", dir], {
         clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + tick * 60_000),
-        sleep: async () => {
+        sleep: boundedSleep(() => {
           tick += 5;
           polls += 1;
-        },
+        }),
         // A live agent that never settles: an attended run would stop waiting
         // immediately, an unattended one polls it until the limit stops it.
         createRuntime: () => ({
