@@ -584,6 +584,105 @@ test("an unattended run stops when its wall-clock limit is breached while waitin
 });
 
 // ---------------------------------------------------------------------------
+// must reject: a deterministic escalation stops the run at once
+// ---------------------------------------------------------------------------
+
+test("an unattended run stops as escalated when its stage hits the attempt limit", async () => {
+  await withTempDir(async (dir) => {
+    const policy = committedPolicy();
+    // The attempt limit is the only stop this run can reach: the wall clock
+    // never advances, and the start limit (20) is far above the four attempts
+    // the policy's limit of 3 allows.
+    policy.budgets.maxWallMinutesPerRun = 600;
+    policy.budgets.maxAgentStartsPerRun = 20;
+    const repo = writeRepo(dir, { policy, seed: SEED_TO_IMPLEMENT });
+
+    const starts = [];
+    const { code, out } = await capture(() =>
+      run([TASK, "--unattended", "--cwd", dir], {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        sleep: boundedSleep(() => {}),
+        // The agent always fails, so the stage is retried until the attempt
+        // limit escalates it.
+        createRuntime: () =>
+          boundedStarts({
+            start: () => {
+              starts.push("implement");
+              return `fake-${starts.length}`;
+            },
+            status: () => "exited",
+            result: () => ({ exitCode: 1 }),
+            stop: () => {},
+          }),
+      }),
+    );
+
+    assert.equal(code, 1, "an escalated run is not a clean stop");
+    assert.match(out, /yukl run: escalated at implement/);
+    assert.doesNotMatch(out, /R-RUN-LIMIT/, "the escalation stops the run before a run limit");
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    const escalation = events.filter((event) => event.type === "decision").at(-1);
+    assert.equal(escalation.decision.kind, "deterministic");
+    assert.equal(escalation.decision.intervention, "escalate");
+    assert.equal(escalation.decision.rule, "R-ATTEMPT-LIMIT");
+    assert.equal(escalation.data.stage, "implement");
+
+    const at = events.indexOf(escalation);
+    assert.equal(
+      events.slice(at + 1).filter((event) => event.type === "stage_started").length,
+      0,
+      "no agent starts after the escalation decision",
+    );
+    assert.equal(starts.length, 4, "one start per attempt, and none after the escalation");
+  });
+});
+
+test("an unattended run stops as escalated when the failure cannot be classified", async () => {
+  await withTempDir(async (dir) => {
+    const policy = committedPolicy();
+    policy.budgets.maxWallMinutesPerRun = 600;
+    policy.budgets.maxAgentStartsPerRun = 20;
+    const repo = writeRepo(dir, { policy, seed: SEED_TO_IMPLEMENT });
+
+    const starts = [];
+    const { code, out } = await capture(() =>
+      run([TASK, "--unattended", "--cwd", dir], {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        sleep: boundedSleep(() => {}),
+        // A settled handle with no exit code matches no failure category, so
+        // the first failure escalates instead of being retried.
+        createRuntime: () =>
+          boundedStarts({
+            start: () => {
+              starts.push("implement");
+              return `fake-${starts.length}`;
+            },
+            status: () => "exited",
+            result: () => ({}),
+            stop: () => {},
+          }),
+      }),
+    );
+
+    assert.equal(code, 1, "an escalated run is not a clean stop");
+    assert.match(out, /yukl run: escalated at implement/);
+    assert.doesNotMatch(out, /R-RUN-LIMIT/, "the escalation stops the run before a run limit");
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    const escalation = events.filter((event) => event.type === "decision").at(-1);
+    assert.equal(escalation.decision.intervention, "escalate");
+    assert.equal(escalation.decision.rule, "R-UNCLASSIFIED");
+    assert.equal(starts.length, 1, "the run starts no agent after the escalation");
+    assert.equal(
+      stageDoneTo(repo.stateDir, "prove").length,
+      0,
+      "an escalated run appends nothing that advances the stage",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // must reject: an auto_at_level the run has not earned blocks for a human
 // ---------------------------------------------------------------------------
 

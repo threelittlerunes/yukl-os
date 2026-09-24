@@ -420,11 +420,22 @@ async function integrateStage({ taskId, deps, state, log }) {
   return mergeIntegrate({ taskId, deps, state, stage, dispatch });
 }
 
-/** True when a diagnosis chose to escalate rather than to try again. */
+/**
+ * True when a diagnosis chose to escalate rather than to try again. The
+ * diagnosis module marks escalation with `intervention: "escalate"`, carried by
+ * each of its deterministic escalation rules (`R-ATTEMPT-LIMIT`,
+ * `R-UNCLASSIFIED`, `R-TABLE-EXHAUSTED`), so that is the shape the engine must
+ * read. `kind` or `action` of "escalate" and `escalate: true` are the earlier
+ * spellings and keep working, so no caller has to translate a diagnosis into an
+ * engine-specific vocabulary before the loop can stop on it.
+ */
 function isEscalation(decision) {
   if (decision === null || typeof decision !== "object") return false;
   return (
-    decision.kind === "escalate" || decision.action === "escalate" || decision.escalate === true
+    decision.kind === "escalate" ||
+    decision.action === "escalate" ||
+    decision.intervention === "escalate" ||
+    decision.escalate === true
   );
 }
 

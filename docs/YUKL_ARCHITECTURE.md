@@ -569,7 +569,7 @@ acquirer reclaims in turn rather than a permanent wedge.
 ### 4.15 Known limits
 <!-- status: background -->
 
-Three limits bound what the machinery above can prove, and they are worth
+Four limits bound what the machinery above can prove, and they are worth
 stating plainly.
 
 1. **The human and the agent share one GitHub identity.** The harness records
@@ -589,3 +589,12 @@ stating plainly.
    the uncommitted tail rather than claiming they are verified; an agent with
    write access to the state directory can append events that extend the chain
    without any committed head contradicting them.
+4. **Reclaiming a stale reclaim guard is not serialised.** The broker's
+   stale-lock reclaim runs under an exclusive `<name>.lock.reclaim` guard
+   (section 4.14), but taking that guard when it is itself stale - a reclaimer
+   that crashed mid-reclaim - is not guarded in turn. Two acquirers that
+   collide on such a guard can in principle both take it, both remove the stale
+   lock, and one of them delete the lock the other has just created. The
+   same-owner re-check each performs narrows the window to the interval between
+   its re-read of the lock and its removal; it does not close it. The module
+   header of `scripts/lifecycle/locks.js` states the same residual limitation.
