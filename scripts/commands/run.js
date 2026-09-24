@@ -15,7 +15,11 @@
 // given, so a task branch cannot name its own runtimes, and from the working
 // tree otherwise, which makes a bare run a local preview rather than a trust
 // boundary. `--unattended` is refused before any adapter is started unless
-// every run budget is a positive integer: an unbounded run must stay attended.
+// every run limit is a positive integer: an unbounded run must stay attended.
+// An unattended run waits for a running stage instead of stopping on it, and
+// stops only when the task is terminal, needs a human, escalates or breaches a
+// run limit (which appends an `enforcement` event); an attended run keeps the
+// step-capped loop it has always had.
 //
 // In a colocated Jujutsu workspace every agent start publishes the Jujutsu
 // working copy into Git first (see withWorkingCopySync): Orca branches a
@@ -34,6 +38,7 @@ import { runUntilBlocked, step as engineStep } from "../lifecycle/engine.js";
 import { pathEnforcement } from "../lifecycle/enforce.js";
 import { appendEvent, headHash, readEvents } from "../lifecycle/events.js";
 import {
+  RUN_LIMIT_KEYS,
   loadPolicy,
   requiresHuman as policyRequiresHuman,
   unattendedAllowed,
@@ -59,8 +64,6 @@ const RUNTIME_FACTORY_RE = /^create[A-Za-z0-9]*Runtime$/;
 const VCS_FACTORY_RE = /^create[A-Za-z0-9]*Vcs$/;
 
 const TASK_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-
-const BUDGET_KEYS = ["maxWallMinutesPerRun", "maxTokensPerRun", "maxAgentStartsPerRun"];
 
 // A step or run outcome that is not a refusal. `blocked` covers a clean stop
 // that asks for a human; `started` and `waiting` are progress, not failure.
@@ -317,13 +320,18 @@ function describeOutcome(outcome) {
   if (outcome.stage) parts.push(`at ${outcome.stage}`);
   if (outcome.from && outcome.to) parts.push(`${outcome.from} -> ${outcome.to}`);
   if (outcome.rule) parts.push(`(${outcome.rule})`);
+  const limit = outcome.limit;
+  if (limit && typeof limit === "object") {
+    parts.push(`(${limit.name} ${limit.observed} >= ${limit.max})`);
+  }
   return parts.join(" ");
 }
 
 /**
  * Run `yukl run`. Returns the process exit code. `overrides` lets a caller
- * (a test) replace the working directory, the adapter loader or the runtime
- * and VCS factories; the defaults are the real modules and the adapters under
+ * (a test) replace the working directory, the adapter loader, the runtime and
+ * VCS factories, the clock and the unattended loop's `sleep` and
+ * `pollIntervalMs`; the defaults are the real modules and the adapters under
  * `<cwd>/scripts/adapters`, so production is never special-cased.
  */
 export async function run(argv = [], overrides = {}) {
@@ -373,14 +381,20 @@ export async function run(argv = [], overrides = {}) {
     const policy = loaded.policy;
 
     if (parsed.unattended && !unattendedAllowed(policy)) {
-      const unset = BUDGET_KEYS.filter(
+      const unset = RUN_LIMIT_KEYS.filter(
         (key) => !(Number.isInteger(policy?.budgets?.[key]) && policy.budgets[key] > 0),
       );
       console.error(
-        `yukl run: --unattended is refused while these run budgets are unset: ${unset.join(", ")}; set each to a positive integer in yukl.policy.json to run unattended`,
+        `yukl run: --unattended is refused while these run limits are unset: ${unset.join(", ")}; set each to a positive integer in yukl.policy.json to run unattended`,
       );
       return 1;
     }
+    // The run limits bound one run whatever its mode; null means unset, and an
+    // unattended run has already been refused above unless both are set.
+    const limits = {
+      maxWallMinutesPerRun: policy?.budgets?.maxWallMinutesPerRun ?? null,
+      maxAgentStartsPerRun: policy?.budgets?.maxAgentStartsPerRun ?? null,
+    };
 
     const stateDir = resolve(cwd, lifecycle.stateDir);
     const ref = currentBranch(cwd);
@@ -430,7 +444,14 @@ export async function run(argv = [], overrides = {}) {
       console.log(describeOutcome(outcome));
       return CLEAN_STEP.has(outcome.status) ? 0 : 1;
     }
-    const result = await runUntilBlocked({ taskId, deps });
+    const result = await runUntilBlocked({
+      taskId,
+      deps,
+      unattended: parsed.unattended,
+      limits,
+      sleep: overrides.sleep,
+      pollIntervalMs: overrides.pollIntervalMs,
+    });
     console.log(describeOutcome(result));
     return CLEAN_RUN.has(result.status) ? 0 : 1;
   } catch (err) {

@@ -27,14 +27,25 @@ const RUN = Object.freeze({
   ESCALATED: "escalated",
   WAITING: "waiting",
   MAX_STEPS: "max-steps",
+  LIMIT: "limit",
 });
 
 const DEFAULT_MAX_STEPS = 64;
+const DEFAULT_POLL_INTERVAL_MS = 1000;
 const ENGINE = "engine";
 const FALLBACK_PATH_SCOPE_RULE = "R-PATH-SCOPE";
 const FALLBACK_RUNTIME_ID = "runtime";
 const INTEGRATE_RUNTIME_ID = "vcs";
 const INTEGRATE_HANDLE_PREFIX = "merge:";
+
+/** The rule recorded when a breached run limit stops a run. */
+export const RUN_LIMIT_RULE = "R-RUN-LIMIT";
+
+/** The run limit keys a run can breach (see yukl.policy.json `budgets`). */
+export const RUN_LIMITS = Object.freeze({
+  WALL: "maxWallMinutesPerRun",
+  STARTS: "maxAgentStartsPerRun",
+});
 
 /** The `human_decision` view of the stage machine only reads top-level fields,
  * but `appendEvent` does not persist them, so replay them from `data`. */
@@ -417,6 +428,84 @@ function isEscalation(decision) {
   );
 }
 
+/** True when `value` is a positive integer. */
+function positiveInt(value) {
+  return Number.isInteger(value) && value > 0;
+}
+
+/** The seq the next event of a run will carry, i.e. one past the log's last. */
+function nextSeq(deps, taskId) {
+  const log = deps.events.readEvents(deps.events.dir, taskId);
+  const last = log.events.at(-1);
+  return last === undefined || !Number.isInteger(last.seq) ? 0 : last.seq + 1;
+}
+
+/**
+ * How many agents a run has started: every `stage_started` event appended at or
+ * after `startSeq` that dispatches an agent. The `integrate` stage records a
+ * `stage_started` marker of its own for the VCS merge, which is not an agent.
+ */
+function runAgentStarts(events, startSeq) {
+  let count = 0;
+  for (const event of events) {
+    if (event?.type !== "stage_started") continue;
+    if (!Number.isInteger(event.seq) || event.seq < startSeq) continue;
+    if (event.data?.runtime === INTEGRATE_RUNTIME_ID) continue;
+    count += 1;
+  }
+  return count;
+}
+
+/** The enforcement event a breached run limit records. */
+function limitEvent(stage, limit) {
+  return {
+    type: "enforcement",
+    actor: ENGINE,
+    data: { stage, rule: RUN_LIMIT_RULE, limit, violations: [] },
+  };
+}
+
+/** The step outcome for a breached run limit. */
+function limitOutcome(stage, limit) {
+  return { status: STEP.ENFORCED, stage, rule: RUN_LIMIT_RULE, limit };
+}
+
+/**
+ * Refuse to start a new agent once the run has spent its agent-start limit.
+ * The check runs only where an agent would start, never on a poll, so a run at
+ * its limit still waits for the agent it has already dispatched.
+ */
+function startLimitRefusal({ taskId, deps, log, stage }) {
+  const limits = deps.runLimits;
+  if (limits === null || typeof limits !== "object") return null;
+  const max = limits.maxAgentStartsPerRun;
+  if (!positiveInt(max)) return null;
+  const observed = runAgentStarts(log.events, limits.startSeq);
+  if (observed < max) return null;
+  const limit = { name: RUN_LIMITS.STARTS, max, observed };
+  append(deps, taskId, limitEvent(stage, limit));
+  return limitOutcome(stage, limit);
+}
+
+/** The wall-clock limit a run has breached, or null when it is inside it. */
+function wallLimitBreach({ deps, startedAt, limits }) {
+  const max = limits?.maxWallMinutesPerRun;
+  if (!positiveInt(max)) return null;
+  const observed = (now(deps).getTime() - startedAt.getTime()) / 60000;
+  if (observed < max) return null;
+  return { name: RUN_LIMITS.WALL, max, observed };
+}
+
+/** The folded stage of a task, for an enforcement event with no step outcome. */
+function foldedStage(deps, taskId) {
+  return replay(deps.events.readEvents(deps.events.dir, taskId).events, deps.stages).stage;
+}
+
+/** The wall clock sleep an unattended loop uses between polls. */
+function defaultSleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
 /** Throw unless the two mandatory dependencies are wired. */
 function assertDeps(deps) {
   if (deps === null || typeof deps !== "object") {
@@ -487,7 +576,11 @@ function assertDeps(deps) {
  *   - `dispatch(stage, taskId) -> { actor, env?, worktree?, spec?, ref?, base?,
  *     anchor?, runtimeId? }`, optional; the per-stage launch context, used for
  *     the actor on `stage_done` and the merge arguments on `integrate`.
- *   - `clock() -> Date`, optional; used to stamp the diagnosis history.
+ *   - `clock() -> Date`, optional; used to stamp the diagnosis history and to
+ *     measure the wall clock of a run.
+ *   - `runLimits`: `{ startSeq, maxAgentStartsPerRun }`, optional; set by
+ *     `runUntilBlocked` so a step refuses to start a further agent once the
+ *     run has spent its agent-start limit (see `runUntilBlocked`).
  */
 export async function step({ taskId, deps } = {}) {
   assertDeps(deps);
@@ -527,34 +620,108 @@ export async function step({ taskId, deps } = {}) {
     return gateStage({ taskId, deps, state, log, stage });
   }
 
+  const refused = startLimitRefusal({ taskId, deps, log, stage });
+  if (refused !== null) return refused;
+
   return startStage({ taskId, deps, stage, runtime });
 }
 
 /**
  * Loop `step` until the lifecycle is terminal, a stage needs a human, the
- * diagnosis escalates, a stage is running or an injected gate is not yet
- * satisfied, or `maxSteps` is reached. Returns
- * `{ status, stage?, rule?, outcome?, steps }`, where `steps` is every outcome
- * taken in order, so a caller can see exactly where the run stopped.
+ * diagnosis escalates, or `maxSteps` is reached; an unattended loop instead
+ * waits for a running stage and keeps driving the task until it is terminal,
+ * needs a human, escalates or breaches a run limit. Returns
+ * `{ status, stage?, rule?, limit?, outcome?, steps }`, where `steps` is every
+ * outcome taken in order, so a caller can see exactly where the run stopped.
+ *
+ * `unattended: true` replaces the step cap with the run limits and polls a
+ * running stage through the injected `sleep` instead of stopping on `waiting`.
+ * An unattended loop therefore requires `limits.maxWallMinutesPerRun` to be a
+ * positive integer: without a wall-clock bound the loop has no bound at all.
+ *
+ * `limits` is `{ maxWallMinutesPerRun, maxAgentStartsPerRun }`, each a positive
+ * integer or null (unset). They bound one run: an elapsed wall clock at or over
+ * the limit stops the run before the next step, and the run's agent starts
+ * (the `stage_started` events it appended, excluding the `integrate` merge
+ * marker) are counted so a further agent is never started once the limit is
+ * spent. Either breach appends an `enforcement` event carrying
+ * `rule: R-RUN-LIMIT` and the breached limit to the task's log, and returns
+ * `status: "limit"`.
  */
-export async function runUntilBlocked({ taskId, deps, maxSteps = DEFAULT_MAX_STEPS } = {}) {
+export async function runUntilBlocked({
+  taskId,
+  deps,
+  maxSteps = DEFAULT_MAX_STEPS,
+  unattended = false,
+  limits = null,
+  sleep = defaultSleep,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+} = {}) {
   assertDeps(deps);
   if (!Number.isInteger(maxSteps) || maxSteps < 1) {
     throw new Error("maxSteps must be a positive integer");
   }
+  if (unattended && !positiveInt(limits?.maxWallMinutesPerRun)) {
+    throw new Error(
+      "an unattended run needs a positive limits.maxWallMinutesPerRun; without one the loop is unbounded",
+    );
+  }
+  if (unattended && typeof sleep !== "function") {
+    throw new Error("sleep must be a function");
+  }
+  if (unattended && (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 0)) {
+    throw new Error("pollIntervalMs must be a non-negative integer");
+  }
 
+  const bounded = limits !== null && typeof limits === "object";
+  const stepDeps = bounded
+    ? {
+        ...deps,
+        runLimits: {
+          startSeq: nextSeq(deps, taskId),
+          maxAgentStartsPerRun: limits.maxAgentStartsPerRun,
+        },
+      }
+    : deps;
+  const startedAt = now(deps);
   const steps = [];
-  for (let i = 0; i < maxSteps; i++) {
-    const outcome = await step({ taskId, deps });
+  const cap = unattended ? Number.POSITIVE_INFINITY : maxSteps;
+
+  for (let i = 0; i < cap; i++) {
+    if (bounded) {
+      const breached = wallLimitBreach({ deps, startedAt, limits });
+      if (breached !== null) {
+        const stage = foldedStage(deps, taskId);
+        append(deps, taskId, limitEvent(stage, breached));
+        return { status: RUN.LIMIT, stage, rule: RUN_LIMIT_RULE, limit: breached, steps };
+      }
+    }
+
+    const outcome = await step({ taskId, deps: stepDeps });
     steps.push(outcome);
     if (outcome.status === STEP.TERMINAL) {
       return { status: RUN.TERMINAL, stage: outcome.stage, outcome, steps };
     }
-    if (outcome.status === STEP.BLOCKED || outcome.status === STEP.ENFORCED) {
+    if (outcome.status === STEP.BLOCKED) {
       return { status: RUN.BLOCKED, rule: outcome.rule, stage: outcome.stage, outcome, steps };
     }
+    if (outcome.status === STEP.ENFORCED) {
+      const status = outcome.rule === RUN_LIMIT_RULE ? RUN.LIMIT : RUN.BLOCKED;
+      return {
+        status,
+        rule: outcome.rule,
+        stage: outcome.stage,
+        limit: outcome.limit,
+        outcome,
+        steps,
+      };
+    }
     if (outcome.status === STEP.WAITING) {
-      return { status: RUN.WAITING, stage: outcome.stage, outcome, steps };
+      if (!unattended) {
+        return { status: RUN.WAITING, stage: outcome.stage, outcome, steps };
+      }
+      await sleep(pollIntervalMs);
+      continue;
     }
     if (outcome.status === STEP.FAILED && isEscalation(outcome.decision)) {
       return { status: RUN.ESCALATED, stage: outcome.stage, outcome, steps };

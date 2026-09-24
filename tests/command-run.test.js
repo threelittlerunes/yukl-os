@@ -107,9 +107,16 @@ function git(args, cwd) {
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
 }
 
-/** Read the repository's committed policy (all run budgets are null). */
+/** Read the repository's committed policy (both run limits switched on). */
 function committedPolicy() {
   return JSON.parse(readFileSync(join(ROOT, "yukl.policy.json"), "utf8"));
+}
+
+/** The committed policy with every run limit unset. */
+function unboundedPolicy() {
+  const policy = committedPolicy();
+  policy.budgets = { maxWallMinutesPerRun: null, maxAgentStartsPerRun: null };
+  return policy;
 }
 
 function baseConfig(lifecycle) {
@@ -361,12 +368,12 @@ test("run under an unreadable Jujutsu workspace fails closed instead of branchin
 });
 
 // ---------------------------------------------------------------------------
-// must reject: an unattended run with unset budgets starts no adapter
+// must reject: an unattended run with an unset run limit starts no adapter
 // ---------------------------------------------------------------------------
 
-test("--unattended with the committed all-null policy exits 1 before any adapter start", async () => {
+test("--unattended with an unset run limit exits 1 before any adapter start", async () => {
   await withTempDir(async (dir) => {
-    writeRepo(dir, { policy: committedPolicy() });
+    writeRepo(dir, { policy: unboundedPolicy() });
     let created = 0;
     const { code, err } = await capture(() =>
       run([TASK, "--unattended", "--cwd", dir], {
@@ -378,18 +385,160 @@ test("--unattended with the committed all-null policy exits 1 before any adapter
     );
     assert.equal(code, 1);
     assert.equal(created, 0, "no runtime is built before the refusal");
+    assert.match(err, /--unattended is refused while these run limits are unset/);
     assert.match(err, /maxWallMinutesPerRun/);
-    assert.match(err, /maxTokensPerRun/);
     assert.match(err, /maxAgentStartsPerRun/);
+    assert.doesNotMatch(err, /maxTokensPerRun/, "there is no token limit to name");
   });
 });
 
-test("the CLI refuses --unattended with exit 1 against the committed policy", async () => {
+test("the CLI refuses --unattended with exit 1 against a policy with a null limit", async () => {
   await withTempDir(async (dir) => {
-    writeRepo(dir, { policy: committedPolicy() });
+    const policy = unboundedPolicy();
+    policy.budgets.maxWallMinutesPerRun = 60;
+    writeRepo(dir, { policy });
     const result = runCli([TASK, "--unattended", "--cwd", dir]);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /--unattended is refused/);
+    assert.match(result.stderr, /maxAgentStartsPerRun/);
+  });
+});
+
+test("the committed policy passes the unattended preflight and reaches the adapter", async () => {
+  await withTempDir(async (dir) => {
+    const repo = writeRepo(dir, { seed: SEED_TO_IMPLEMENT });
+    let created = 0;
+    let minutes = 0;
+    const { code, out, err } = await capture(() =>
+      run([TASK, "--unattended", "--cwd", dir], {
+        // The loop is bounded by the policy's own 120-minute limit, jumped over
+        // to keep the test quick; only `implement` has a runtime in this repo,
+        // so the run would otherwise wait at the `prove` gate.
+        clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + minutes * 60_000),
+        sleep: async () => {
+          minutes += 120;
+        },
+        createRuntime: () => {
+          created += 1;
+          return {
+            start: () => "run-1",
+            status: () => "exited",
+            result: () => ({ exitCode: 0 }),
+            stop: () => {},
+          };
+        },
+      }),
+    );
+
+    assert.equal(created, 1, "the committed run limits let the unattended run build its runtime");
+    assert.doesNotMatch(err, /--unattended is refused/);
+    assert.equal(
+      stageDoneTo(repo.stateDir, "prove").length,
+      1,
+      "the unattended run drove the agent stage to completion",
+    );
+    assert.equal(code, 1, "the run stops on its wall-clock limit");
+    assert.match(out, /R-RUN-LIMIT/);
+    assert.match(out, /maxWallMinutesPerRun 120 >= 120/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// must reject: an unattended run stops on a breached run limit
+// ---------------------------------------------------------------------------
+
+test("an unattended run stops on a breached agent-start limit and records it", async () => {
+  await withTempDir(async (dir) => {
+    const policy = committedPolicy();
+    // One start is allowed. The agent always fails, so the run retries the
+    // stage and the start that would be the second agent is refused.
+    policy.budgets.maxAgentStartsPerRun = 1;
+    policy.budgets.maxWallMinutesPerRun = 600;
+    const repo = writeRepo(dir, { policy, seed: SEED_TO_IMPLEMENT });
+
+    let minutes = 0;
+    const starts = [];
+    const { code, out } = await capture(() =>
+      run([TASK, "--unattended", "--cwd", dir], {
+        clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + minutes * 60_000),
+        sleep: async () => {
+          minutes += 1;
+        },
+        createRuntime: () => ({
+          start: (dispatch) => {
+            starts.push(dispatch.stage);
+            return `fake-${starts.length}`;
+          },
+          status: () => "exited",
+          result: () => ({ exitCode: 1 }),
+          stop: () => {},
+        }),
+      }),
+    );
+
+    assert.equal(code, 1, "a breached run limit is not a clean stop");
+    assert.match(out, /yukl run: limit/);
+    assert.match(out, /R-RUN-LIMIT/);
+    assert.match(out, /maxAgentStartsPerRun 1 >= 1/);
+    assert.deepEqual(starts, ["implement"], "the run starts no agent past its limit");
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    const enforcement = events.filter((event) => event.type === "enforcement");
+    assert.equal(enforcement.length, 1, "exactly one enforcement event records the breach");
+    assert.equal(enforcement[0].actor, "engine");
+    assert.equal(enforcement[0].data.rule, "R-RUN-LIMIT");
+    assert.deepEqual(enforcement[0].data.limit, {
+      name: "maxAgentStartsPerRun",
+      max: 1,
+      observed: 1,
+    });
+    assert.equal(
+      events.filter((event) => event.type === "stage_started" && event.data.stage === "implement")
+        .length,
+      1,
+      "exactly one agent was started",
+    );
+  });
+});
+
+test("an unattended run stops when its wall-clock limit is breached while waiting", async () => {
+  await withTempDir(async (dir) => {
+    const policy = committedPolicy();
+    policy.budgets.maxWallMinutesPerRun = 10;
+    policy.budgets.maxAgentStartsPerRun = 50;
+    const repo = writeRepo(dir, { policy, seed: SEED_TO_IMPLEMENT });
+
+    let tick = 0;
+    let polls = 0;
+    const { code, out } = await capture(() =>
+      run([TASK, "--unattended", "--cwd", dir], {
+        clock: () => new Date(Date.parse("2026-01-01T00:00:00.000Z") + tick * 60_000),
+        sleep: async () => {
+          tick += 5;
+          polls += 1;
+        },
+        // A live agent that never settles: an attended run would stop waiting
+        // immediately, an unattended one polls it until the limit stops it.
+        createRuntime: () => ({
+          start: () => "live-1",
+          status: () => "live",
+          result: () => null,
+          stop: () => {},
+        }),
+      }),
+    );
+
+    assert.equal(code, 1);
+    assert.ok(polls >= 1, "the unattended run waited for the running stage");
+    assert.match(out, /R-RUN-LIMIT/);
+    assert.match(out, /maxWallMinutesPerRun 10 >= 10/);
+
+    const enforcement = readEvents(repo.stateDir, TASK).events.filter(
+      (event) => event.type === "enforcement",
+    );
+    assert.equal(enforcement.length, 1);
+    assert.equal(enforcement[0].data.limit.name, "maxWallMinutesPerRun");
+    assert.equal(enforcement[0].data.stage, "implement");
   });
 });
 
