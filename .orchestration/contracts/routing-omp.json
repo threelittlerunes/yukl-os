@@ -1,0 +1,21 @@
+{
+  "task_id": "routing-omp",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".github/ISSUE_TEMPLATE/bug_report.md",
+    ".orchestration/artifacts/README.md",
+    ".orchestration/contracts/routing-omp.json",
+    "CHANGELOG.md",
+    "docs/intents/README.md",
+    "flow.config.json",
+    "orca.yaml",
+    "scripts/repo-checks.js",
+    "tests/adapter-orca.test.js",
+    "tests/command-run.test.js",
+    "tests/config.test.js",
+    "yukl.config.json"
+  ]
+}

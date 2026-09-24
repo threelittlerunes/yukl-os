@@ -10,7 +10,7 @@ Artifacts are written as **newline-delimited JSON (NDJSON)**, one event per
 line, UTF-8, with no pretty-printing. A single event looks like:
 
 ```json
-{"ts":"2026-09-22T10:14:03.512Z","level":"info","trace_id":"trace_01J8Z3K4Q2V9N7M6B5X4C3T2R1","span_id":"span_0007","task_id":"task_78cbf848c6c4","dispatch_id":"ctx_f5f5b385d594","stage_id":"expert-power-drafter","agent":"opencode","event":"contract.written","message":"wrote empirical proof","duration_ms":412,"error":null}
+{"ts":"2026-09-22T10:14:03.512Z","level":"info","trace_id":"trace_01J8Z3K4Q2V9N7M6B5X4C3T2R1","span_id":"span_0007","task_id":"task_78cbf848c6c4","dispatch_id":"ctx_f5f5b385d594","stage_id":"expert-power-drafter","agent":"omp","event":"contract.written","message":"wrote empirical proof","duration_ms":412,"error":null}
 ```
 
 Required fields: `ts` (RFC 3339 UTC), `level` (`debug|info|warn|error`),

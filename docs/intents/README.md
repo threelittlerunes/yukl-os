@@ -21,4 +21,4 @@ Output of the `legitimate-power-router` stage, from the scope interview on 2026-
 node scripts/yukl.js render expert-power-drafter --task-id <task_id>
 ```
 
-Mutations go to `--agent opencode` and QA to `--agent antigravity`.
+Mutations go to `--agent omp` and QA to `--agent antigravity`.

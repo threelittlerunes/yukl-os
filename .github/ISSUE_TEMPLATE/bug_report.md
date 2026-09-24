@@ -35,7 +35,7 @@ What actually happened. Include the exact stderr log where possible.
 
 - OS: [e.g. Windows 11, macOS 15, Ubuntu 24.04]
 - Node version: [e.g. 24.13.0]
-- Agent: [e.g. opencode, claude, codex]
+- Agent: [e.g. omp, claude, codex]
 - Harness version: [e.g. 2.0.0]
 
 ## Additional context
