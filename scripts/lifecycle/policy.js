@@ -2,7 +2,7 @@
 // Autonomy policy for the Yukl Power Harness.
 //
 // yukl.policy.json records which SDLC transitions an agent may take without a
-// human, up to which track-record level, and under which run budgets. This
+// human, up to which track-record level, and under which run limits. This
 // module is the single loader and schema checker: `loadPolicy` reads the
 // policy from a base ref (argument-array `git show`, never a shell) or, as a
 // local preview, from the working tree; the pure helpers `policyViolations`,
@@ -15,7 +15,11 @@ import { join } from "node:path";
 
 export const POLICY_PATH = "yukl.policy.json";
 
-const BUDGET_KEYS = ["maxWallMinutesPerRun", "maxTokensPerRun", "maxAgentStartsPerRun"];
+// The run limits: the only two settings an unattended run is bounded by. A
+// limit is a positive integer (minutes of wall clock, agent starts) or null
+// (unset, which keeps every run attended). There is no token limit: no adapter
+// can measure tokens, so it must not exist as a setting.
+export const RUN_LIMIT_KEYS = Object.freeze(["maxWallMinutesPerRun", "maxAgentStartsPerRun"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -28,8 +32,9 @@ function isPlainObject(value) {
  *     `{ auto_at_level: <integer >= 1> }`
  *   - `ceiling` is an integer >= 0
  *   - `limits.maxAttemptsPerStage` is an integer >= 1
- *   - `budgets.maxWallMinutesPerRun`, `maxTokensPerRun` and
- *     `maxAgentStartsPerRun` are each a positive integer or null
+ *   - `budgets` holds exactly the run limits in `RUN_LIMIT_KEYS`
+ *     (`maxWallMinutesPerRun`, `maxAgentStartsPerRun`), each a positive
+ *     integer or null; any other key (a token limit included) is refused
  *   - `trackRecord.levels` is an array of `{ level, minCleanRuns }` entries,
  *     each a non-negative integer
  */
@@ -72,7 +77,14 @@ export function policyViolations(doc) {
   if (!isPlainObject(doc.budgets)) {
     violations.push("budgets must be an object");
   } else {
-    for (const key of BUDGET_KEYS) {
+    for (const key of Object.keys(doc.budgets)) {
+      if (!RUN_LIMIT_KEYS.includes(key)) {
+        violations.push(
+          `budgets.${key} is not a run limit; budgets accepts only ${RUN_LIMIT_KEYS.join(" and ")}`,
+        );
+      }
+    }
+    for (const key of RUN_LIMIT_KEYS) {
       const value = doc.budgets[key];
       if (value === null) continue;
       if (!Number.isInteger(value) || value <= 0) {
@@ -169,11 +181,11 @@ export function requiresHuman(policy, transitionId, level = 0) {
 }
 
 /**
- * True only when every run budget is a positive integer. A null (unset) budget
+ * True only when every run limit is a positive integer. A null (unset) limit
  * keeps every run attended: an unbounded run must not be run unattended.
  */
 export function unattendedAllowed(policy) {
-  const budgets = policy?.budgets;
-  if (!isPlainObject(budgets)) return false;
-  return BUDGET_KEYS.every((key) => Number.isInteger(budgets[key]) && budgets[key] > 0);
+  const limits = policy?.budgets;
+  if (!isPlainObject(limits)) return false;
+  return RUN_LIMIT_KEYS.every((key) => Number.isInteger(limits[key]) && limits[key] > 0);
 }

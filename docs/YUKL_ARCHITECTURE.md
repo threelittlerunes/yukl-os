@@ -351,12 +351,18 @@ the anchors, path enforcement, the failure diagnosis and the runtime and VCS
 adapters named in the `lifecycle` block of `yukl.config.json`, then drives the
 task: with `--once` it takes a single engine step, otherwise it loops until the
 lifecycle is terminal, a stage needs a human, the diagnosis escalates, a stage
-is running or a gate is unsatisfied, or 64 steps have passed. The exit code is
-0 when the run advanced or stopped cleanly, 1 on a refusal or an error, and 2
-on a usage problem. With `--base`, the `lifecycle` block and the policy are
-read from that ref through `git show`, so a task branch cannot name its own
-runtimes; without `--base` the working tree is read, which is a local preview
-rather than a trust boundary.
+is running or a gate is unsatisfied, or 64 steps have passed; the two run
+limits (section 4.7) bound that loop too, so an attended run stops on a breach
+exactly as an unattended one does. `--unattended` replaces the step cap with the
+run limits: the loop waits for a running stage instead of stopping on it and
+keeps driving the task until it is terminal, needs a human, escalates or
+breaches a run limit, and it is refused
+before any adapter starts unless both run limits are positive integers. The
+exit code is 0 when the run advanced or stopped cleanly, 1 on a refusal, an
+enforcement stop or an error, and 2 on a usage problem. With `--base`, the
+`lifecycle` block and the policy are read from that ref through `git show`, so a
+task branch cannot name its own runtimes; without `--base` the working tree is
+read, which is a local preview rather than a trust boundary.
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
@@ -389,9 +395,9 @@ log is left byte for byte intact.
 <!-- status: implemented tests=tests/lifecycle-policy.test.js#requiresHuman maps human, auto and auto_at_level and fails closed -->
 
 `yukl.policy.json` maps each transition id to `"human"`, `"auto"` or
-`{ auto_at_level: n }`, and sets a `ceiling`, an attempt limit and the run
-budgets. `requiresHuman(policy, transitionId, level)` returns true for
-`"human"`, false for `"auto"`, and for `{ auto_at_level: n }` needs a human
+`{ auto_at_level: n }`, and sets a `ceiling`, an attempt limit and the two run
+limits (section 4.7). `requiresHuman(policy, transitionId, level)` returns true
+for `"human"`, false for `"auto"`, and for `{ auto_at_level: n }` needs a human
 below level `n`. An unknown transition id, or a value that is neither form,
 fails closed and needs a human. The committed policy makes stage advances,
 within-limit retries, implementation merges, enforcement stops, autonomy
@@ -412,16 +418,38 @@ level to each reached threshold in `policy.trackRecord.levels` in ascending
 order, clamps it to `ceiling` and subtracts one for any enforcement stop. With
 the committed policy, five clean audits earn level 1.
 
-### 4.7 Run budgets and unattended runs
-<!-- status: planned -->
+### 4.7 Run limits and unattended runs
+<!-- status: implemented tests=tests/command-run.test.js#an unattended run stops on a breached agent-start limit and records it -->
 
-`yukl.policy.json` declares `maxWallMinutesPerRun`, `maxTokensPerRun` and
-`maxAgentStartsPerRun`, and requires each to be a positive integer or null. No
-code enforces these budgets yet: they exist so that `yukl run --unattended` can
-be refused while any of them is unset. That refusal is implemented and happens
-before any adapter is started; the committed policy leaves all three null, so
-an unattended run is refused today. What remains planned is the enforcement:
-nothing stops, kills or penalises a run that exceeds a budget once one is set.
+`yukl.policy.json` declares exactly two run limits under `budgets`:
+`maxWallMinutesPerRun` and `maxAgentStartsPerRun`, each a positive integer or
+`null`. There is no token limit: no adapter can measure tokens, so it must not
+exist as a setting, and a policy that carries one is refused by the schema
+(`budgets.maxTokensPerRun is not a run limit`). A `null` limit is unset, which
+keeps every run attended: `yukl run --unattended` is refused before any adapter
+is started while either limit is unset, because a loop with no wall-clock bound
+has no bound at all. The committed policy ships both switched on - 120 minutes
+and 12 agent starts per run.
+
+The limits are enforced, not merely declared. An unattended loop measures its
+own wall clock against `maxWallMinutesPerRun` before every step, so a stage that
+is merely running cannot keep it alive past the limit; and it counts the agent
+starts it has made itself (the `stage_started` events it appended, excluding the
+`integrate` merge marker) against `maxAgentStartsPerRun` at the moment an agent
+would start, so a run at its limit still waits for the agent it has already
+dispatched instead of abandoning it. Either breach appends an `enforcement`
+event carrying `rule: R-RUN-LIMIT` and the breached limit to the task's log and
+stops the run, which exits 1; nothing is killed and nothing is penalised beyond
+that stop, and because the count is run-scoped, a later run of the same task
+starts with the limit unspent.
+
+The limits bound every run, attended as well as unattended: `yukl run` hands the
+policy's two values to the loop whatever its mode, the wall-clock check and the
+agent-start refusal run on every step, and a breach records the same
+`enforcement` event and stops the run with the same exit code. `--unattended`
+changes only what the loop does between steps - it waits for a running stage
+instead of stopping on it - and it is the only mode that is refused while a
+limit is unset.
 
 ### 4.8 The event log
 <!-- status: implemented tests=tests/lifecycle-events.test.js#editing any byte of an earlier line makes verifyChain fail naming that line -->
@@ -473,10 +501,75 @@ named adapter has a matching file under `scripts/adapters/` and that the state
 directory resolves inside the repository; `yukl run` reads the same checks back
 through `lifecycleViolations`.
 
-### 4.13 Known limits
+### 4.13 The scheduler
+<!-- status: implemented tests=tests/command-schedule.test.js#schedule runs a wave concurrently and starts the next wave only after it settles -->
+
+`yukl schedule <task_id>... [--cwd <dir>] [--base <git-ref>]
+[--locks-dir <dir>] [--worktrees-dir <dir>] [--json]` drives several tasks
+unattended at once. Each task runs `yukl run <task_id> --unattended` in its own
+Git worktree under `.orchestration/worktrees/<task_id>` (created detached from
+the base ref, reused when it already exists), so two tasks never share a
+checkout. Two tasks may run at the same time only when their intents'
+`allowed_paths` cannot overlap: the planner compares the directory prefix of
+each pattern (`scripts/**` and `scripts/*.js` both scope `scripts`), treats a
+pattern that contains another as overlapping, and packs the tasks into waves in
+the order given, so a task joins the first wave it fits and a wave runs
+concurrently while the next one waits. A task whose intent is missing or
+malformed has an unknown scope and overlaps everything, which serialises it
+rather than letting it race. Each task takes its id as an advisory lock
+(section 4.14) before its worktree is prepared and releases it afterwards, and a
+task whose lock is held by a live owner is reported and skipped instead of run.
+The exit code is 0 when every task exited 0 and 1 when any failed or was
+refused. There is no queue file and no daemon: the positional task ids are the
+whole input, so a scheduled run is as reproducible as the shell history that
+started it.
+
+With `--base`, each task's intent is read from that ref through `git show`,
+exactly as `yukl run --base` reads its `lifecycle` block and its policy, so a
+task branch cannot widen the `allowed_paths` its own scheduling is planned from
+- an intent edited only in the working tree is ignored. Without `--base` the
+working tree is read, which makes local mode a developer preview rather than a
+trust boundary: the scheduler then plans the waves from whatever the checkout
+says. `--base` is also passed on to every task's `yukl run`, so the same ref
+governs what each task is allowed to do once it starts.
+
+### 4.14 The advisory lock broker
+<!-- status: implemented tests=tests/lifecycle-locks.test.js#a lock whose owner process is gone is reclaimed, not respected -->
+
+`scripts/lifecycle/locks.js` guards a shared resource - a dependency install, a
+task's worktree, a branch - with one file per lock at
+`.orchestration/locks/<name>.lock`. The exclusive create of that file is the
+mutual exclusion (`writeFileSync` with the `wx` flag fails with `EEXIST` when
+someone else holds it), so the broker needs no lock manager and no second state
+store. The file records its owner as JSON: `{ name, pid, host, task, at }`.
+`yukl lock hold <name> [--task <id>] -- <command>` acquires the lock, runs the
+command while holding it, and releases it in a `finally`, so a failed or killed
+command still releases; `yukl lock status <name>` and `yukl lock release <name>`
+inspect and clean up, and a release names the process id it releases so a
+stranger cannot remove a live owner's lock without `--force`. When the recorded
+process is gone - the owner crashed or was killed - a later acquirer reclaims
+the lock instead of blocking forever, and the dead owner is reported. Nothing is
+taken on trust beyond that: a lock file that cannot be parsed is refused rather
+than reclaimed, because guessing would hand out a lock another process may still
+hold. The clock, the process id, the host and the liveness check are injectable,
+so the behaviour is tested without a real process, a real clock or a real crash.
+
+Reclaiming is not atomic with the inspection that found the owner dead, so it
+goes through a second lock file, `<name>.lock.reclaim`, taken exclusively by the
+one acquirer that may remove the stale lock. Two acquirers that both see the
+same dead owner therefore cannot both remove: the loser is refused with the lock
+reported held, and if it waits it re-inspects the winner's fresh lock and finds
+it live. The guard holder re-reads the lock under the guard and removes it only
+while it still names the same dead owner, so a lock that changed hands since the
+inspection is left alone rather than deleted; a lock that cannot be re-read as
+the same record is never removed. The guard records its own owner like any lock,
+so a reclaimer that crashed mid-reclaim leaves a stale guard that the next
+acquirer reclaims in turn rather than a permanent wedge.
+
+### 4.15 Known limits
 <!-- status: background -->
 
-Three limits bound what the machinery above can prove, and they are worth
+Four limits bound what the machinery above can prove, and they are worth
 stating plainly.
 
 1. **The human and the agent share one GitHub identity.** The harness records
@@ -496,3 +589,12 @@ stating plainly.
    the uncommitted tail rather than claiming they are verified; an agent with
    write access to the state directory can append events that extend the chain
    without any committed head contradicting them.
+4. **Reclaiming a stale reclaim guard is not serialised.** The broker's
+   stale-lock reclaim runs under an exclusive `<name>.lock.reclaim` guard
+   (section 4.14), but taking that guard when it is itself stale - a reclaimer
+   that crashed mid-reclaim - is not guarded in turn. Two acquirers that
+   collide on such a guard can in principle both take it, both remove the stale
+   lock, and one of them delete the lock the other has just created. The
+   same-owner re-check each performs narrows the window to the interval between
+   its re-read of the lock and its removal; it does not close it. The module
+   header of `scripts/lifecycle/locks.js` states the same residual limitation.

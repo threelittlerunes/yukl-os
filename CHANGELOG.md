@@ -7,6 +7,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `yukl run <task_id> --unattended` keeps driving one task until it is terminal,
+  needs a human, escalates or breaches a run limit, waiting for a running stage
+  instead of stopping at the 64-step cap; an attended run keeps the step-capped
+  loop it has always had. The two run limits in `yukl.policy.json` are now
+  enforced: an elapsed `maxWallMinutesPerRun` stops the run before the next
+  step, an exhausted `maxAgentStartsPerRun` refuses the agent start that would
+  exceed it (so a run at its limit still waits for the agent it dispatched),
+  and either breach appends an `enforcement` event carrying `R-RUN-LIMIT` and
+  the breached limit to the task's log before the run exits 1 (v3-unattended).
+- `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended:
+  each runs `yukl run --unattended` in its own Git worktree under
+  `.orchestration/worktrees/<task_id>`, tasks whose intents' `allowed_paths`
+  cannot overlap share a wave and run in parallel, overlapping tasks are
+  serialised into later waves, and a task whose intent cannot be read is
+  treated as an unknown scope that overlaps everything (v3-unattended).
+- `yukl lock <hold|status|release> <name> [--task <id>] [-- <command>]` and the
+  advisory lock broker behind it (`scripts/lifecycle/locks.js`): a lock is one
+  file at `.orchestration/locks/<name>.lock`, created exclusively so the create
+  is the mutual exclusion, recording `{ name, pid, host, task, at }`; `hold`
+  releases it however the command ends, and a lock whose recorded process is
+  gone is reclaimed by the next acquirer while an unparseable lock is refused
+  rather than reclaimed (v3-unattended).
+
+### Changed
+- Removed `maxTokensPerRun` everywhere (policy, validator, `run.js`, tests,
+  docs): no adapter can measure tokens, so it must not exist as a setting and
+  the policy schema now refuses any `budgets` key that is not a run limit. The
+  committed `yukl.policy.json` ships the two run limits switched on:
+  `maxWallMinutesPerRun: 120` and `maxAgentStartsPerRun: 12`. A `null` limit is
+  still unset, and `--unattended` is still refused before any adapter starts
+  while either limit is unset (v3-unattended).
+- The unattended refusal message names run limits, not budgets, and
+  `docs/YUKL_ARCHITECTURE.md` sections 4.2, 4.5 and 4.7 describe the enforced
+  limits while new sections 4.13 and 4.14 document the scheduler and the lock
+  broker (v3-unattended).
 - `yukl init`: installs the harness into a target repository on a feature
   branch without overwriting anything it already has. It refuses (exit 1, no
   writes) outside a Git repo, on the default branch, on a detached HEAD, on a
@@ -161,6 +196,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `yukl verify --base` now warns on stderr when the working tree carries
   uncommitted or untracked changes, since the preview checks committed state
   only (base...HEAD) (task B3).
+- The engine now stops a run as escalated when the diagnosis escalates it:
+  `isEscalation` reads the diagnosis's own `intervention: "escalate"` - the
+  shape every deterministic escalation rule carries (`R-ATTEMPT-LIMIT`,
+  `R-UNCLASSIFIED`, `R-TABLE-EXHAUSTED`) - instead of only the older `kind:`,
+  `action:` and `escalate:` spellings. A stage that exhausts its attempts, or
+  fails in a way nothing can classify, now hands the task to a human at once
+  instead of being retried until a run limit happens to stop the run
+  (v3-unattended).
+- The lock broker's stale reclaim is atomic against a rival acquirer: reclaim
+  now runs under an exclusive `<name>.lock.reclaim` guard and re-reads the lock
+  before removing it, so two acquirers that both see a dead owner can no longer
+  both remove and both end up holding the lock; a stale guard is reclaimed like
+  any stale lock (v3-unattended). Reclaiming that guard is itself not
+  serialised, so two acquirers colliding on a crashed reclaimer's guard can in
+  principle both take it; the same-owner re-check narrows that window but does
+  not close it. The module header of `scripts/lifecycle/locks.js` and section
+  4.15 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
+  (v3-unattended).
+- The unattended-loop tests fail fast instead of hanging when a run limit stops
+  firing: their fake sleep and fake runtime are bounded, so a loop with no exit
+  throws after a generous number of polls or agent starts. An immediately
+  resolving sleep starves the event loop, which is why the test runner's own
+  timeout could never end the hang (v3-unattended).
+- `yukl schedule` reads each task's intent from `--base` through `git show`, as
+  `yukl run --base` reads its config and policy, so a task branch can no longer
+  widen the `allowed_paths` its own scheduling is planned from; without `--base`
+  the working tree stays a documented local preview (v3-unattended).
 
 ### Planned
 - Scheduled artifact purge implementing the retention policy in

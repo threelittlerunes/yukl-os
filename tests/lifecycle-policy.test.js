@@ -1,17 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  RUN_LIMIT_KEYS,
   loadPolicy,
   policyViolations,
   requiresHuman,
   unattendedAllowed,
 } from "../scripts/lifecycle/policy.js";
 import { validate } from "../scripts/validators/policy.js";
+import { runInit } from "../scripts/yukl.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const COMMITTED = JSON.parse(readFileSync(join(ROOT, "yukl.policy.json"), "utf8"));
@@ -92,7 +94,7 @@ test("policyViolations rejects a ceiling below zero and an auto_at_level below o
   );
 });
 
-test("policyViolations rejects a bad maxAttemptsPerStage and a bad budget", () => {
+test("policyViolations rejects a bad maxAttemptsPerStage and a bad run limit", () => {
   const badAttempts = clone(COMMITTED);
   badAttempts.limits.maxAttemptsPerStage = 0;
   assert.ok(
@@ -101,13 +103,31 @@ test("policyViolations rejects a bad maxAttemptsPerStage and a bad budget", () =
     ),
   );
 
-  const badBudget = clone(COMMITTED);
-  badBudget.budgets.maxTokensPerRun = -5;
+  const badLimit = clone(COMMITTED);
+  badLimit.budgets.maxWallMinutesPerRun = 0;
   assert.ok(
-    policyViolations(badBudget).some((v) =>
-      /budgets\.maxTokensPerRun must be a positive integer or null/.test(v),
+    policyViolations(badLimit).some((v) =>
+      /budgets\.maxWallMinutesPerRun must be a positive integer or null/.test(v),
     ),
   );
+
+  const missing = clone(COMMITTED);
+  missing.budgets = { maxWallMinutesPerRun: 60 };
+  assert.ok(
+    policyViolations(missing).some((v) =>
+      /budgets\.maxAgentStartsPerRun must be a positive integer or null/.test(v),
+    ),
+  );
+});
+
+test("policyViolations refuses maxTokensPerRun as a key that is not a run limit", () => {
+  const withTokens = clone(COMMITTED);
+  withTokens.budgets.maxTokensPerRun = 100000;
+  const violations = policyViolations(withTokens);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /budgets\.maxTokensPerRun is not a run limit/);
+  assert.match(violations[0], /maxWallMinutesPerRun and maxAgentStartsPerRun/);
+  assert.deepEqual([...RUN_LIMIT_KEYS], ["maxWallMinutesPerRun", "maxAgentStartsPerRun"]);
 });
 
 test("policyViolations rejects a malformed trackRecord level", () => {
@@ -151,22 +171,66 @@ test("requiresHuman fails closed on a malformed autonomy value", () => {
 // unattendedAllowed (pure function)
 // ---------------------------------------------------------------------------
 
-test("unattendedAllowed is true only when every budget is a positive integer", () => {
-  const complete = {
-    budgets: { maxWallMinutesPerRun: 60, maxTokensPerRun: 100000, maxAgentStartsPerRun: 4 },
-  };
+test("unattendedAllowed is true only when every run limit is a positive integer", () => {
+  const complete = { budgets: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 4 } };
   assert.equal(unattendedAllowed(complete), true);
 
-  for (const key of ["maxWallMinutesPerRun", "maxTokensPerRun", "maxAgentStartsPerRun"]) {
+  for (const key of RUN_LIMIT_KEYS) {
     const budgets = { ...complete.budgets, [key]: null };
     assert.equal(unattendedAllowed({ budgets }), false, `${key} null must block unattended runs`);
+    const zero = { ...complete.budgets, [key]: 0 };
+    assert.equal(
+      unattendedAllowed({ budgets: zero }),
+      false,
+      `${key} 0 must block unattended runs`,
+    );
   }
 });
 
-test("unattendedAllowed is false for the committed policy (all budgets null)", () => {
-  assert.equal(unattendedAllowed(COMMITTED), false);
+test("unattendedAllowed is false for a policy with no run limits", () => {
   assert.equal(unattendedAllowed({}), false);
   assert.equal(unattendedAllowed({ budgets: {} }), false);
+  assert.equal(unattendedAllowed({ budgets: { maxWallMinutesPerRun: null } }), false);
+});
+
+test("the committed policy ships the two run limits switched on", () => {
+  assert.deepEqual(COMMITTED.budgets, {
+    maxWallMinutesPerRun: 120,
+    maxAgentStartsPerRun: 12,
+  });
+  assert.equal(unattendedAllowed(COMMITTED), true);
+  assert.equal(Object.hasOwn(COMMITTED.budgets, "maxTokensPerRun"), false);
+});
+
+test("yukl init writes no policy, and any template that ships one carries the same limits", async () => {
+  await withTempRepo(async (dir) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node t.js" } }));
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "base"], dir);
+    git(["checkout", "-q", "-b", "feature"], dir);
+
+    const result = runInit({ cwd: dir, yuklPin: "deadbeef", checkPinReachable: () => true });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(
+      result.writes.includes("yukl.policy.json"),
+      false,
+      "yukl init installs no policy, so a repository keeps the one it has",
+    );
+    assert.equal(readdirSync(join(dir)).includes("yukl.policy.json"), false);
+  });
+
+  // The harness ships exactly one set of run limits (yukl.policy.json). A
+  // template added later that writes a policy must ship the same ones.
+  for (const name of readdirSync(join(ROOT, "templates"))) {
+    if (!name.endsWith(".json")) continue;
+    const doc = JSON.parse(readFileSync(join(ROOT, "templates", name), "utf8"));
+    if (!Object.hasOwn(doc, "budgets")) continue;
+    assert.deepEqual(
+      doc.budgets,
+      COMMITTED.budgets,
+      `templates/${name} must ship the committed run limits`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

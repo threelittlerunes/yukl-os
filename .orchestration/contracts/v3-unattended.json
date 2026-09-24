@@ -1,0 +1,32 @@
+{
+  "task_id": "v3-unattended",
+  "empirical_proof": [
+    {
+      "command": "npm run build",
+      "expected_exit_code": 0
+    },
+    {
+      "command": "npm run test",
+      "expected_exit_code": 0
+    }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/v3-unattended.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "scripts/commands/lock.js",
+    "scripts/commands/run.js",
+    "scripts/commands/schedule.js",
+    "scripts/lifecycle/engine.js",
+    "scripts/lifecycle/locks.js",
+    "scripts/lifecycle/policy.js",
+    "tests/acceptance-b.test.js",
+    "tests/command-run.test.js",
+    "tests/command-schedule.test.js",
+    "tests/lifecycle-engine.test.js",
+    "tests/lifecycle-locks.test.js",
+    "tests/lifecycle-policy.test.js",
+    "yukl.policy.json"
+  ]
+}
