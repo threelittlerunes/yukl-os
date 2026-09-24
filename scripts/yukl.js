@@ -1191,28 +1191,59 @@ export function isJjBookmarkName(name) {
 }
 
 /**
+ * The nearest directory at or above `cwd` that holds a `.jj` entry (directory
+ * or file), walking up to the filesystem root, or null when there is none.
+ * `jj root` does this walk itself, but a workspace marker has to be found even
+ * when jj cannot answer (it is missing, or the workspace is unreadable), which
+ * is exactly when the harness must not mistake a workspace for plain Git.
+ */
+function jjDirAtOrAbove(cwd) {
+  let dir = resolve(cwd);
+  for (;;) {
+    if (existsSync(join(dir, ".jj"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
  * Locate the Jujutsu workspace containing `cwd`. Returns `{ root, error }`.
  * jj answers this itself: it is run *in* `cwd`, where `jj root` walks up the
  * directory tree, so a subdirectory and the workspace root resolve alike (jj's
  * `--repository` flag does not walk up, only an exact workspace root). A plain
  * Git repository is `{ root: null, error: null }` rather than a throw: the
  * harness has to run in Git repositories that know nothing about Jujutsu.
- * `error` is set only when a workspace is unmistakably there - `.jj` in `cwd` -
- * and jj cannot be run at all, which must fail closed instead of passing as
- * "nothing to publish".
+ *
+ * The answer fails closed: a `.jj` at or above `cwd` (the walk stops at the
+ * filesystem root) means a workspace is unmistakably there, so jj failing - it
+ * cannot be run, or `jj root` exits non-zero - is an error naming the directory
+ * that holds `.jj` and jj's first stderr line. Passing an unreadable workspace
+ * off as "nothing to publish" would let a dispatcher branch a worker from a
+ * stale tip. Only a tree with no `.jj` anywhere stays `{ root: null, error:
+ * null }`.
  */
 export function jjWorkspaceRoot(cwd) {
+  const jjDir = jjDirAtOrAbove(cwd);
   const result = spawnSync("jj", ["root"], { cwd, encoding: "utf8" });
   if (result.error) {
-    if (!existsSync(join(cwd, ".jj"))) return { root: null, error: null };
+    if (jjDir === null) return { root: null, error: null };
     return {
       root: null,
-      error: `.jj is present in ${cwd} but jj could not be run: ${result.error.message}`,
+      error: `.jj is present in ${jjDir} but jj could not be run: ${result.error.message}`,
     };
   }
-  if (result.status !== 0) return { root: null, error: null };
+  if (result.status !== 0) {
+    if (jjDir === null) return { root: null, error: null };
+    return {
+      root: null,
+      error: `.jj is present in ${jjDir} but jj root failed: ${firstFailedLine(result)}`,
+    };
+  }
   const root = (result.stdout || "").trim();
-  return { root: root === "" ? null : root, error: null };
+  if (root !== "") return { root, error: null };
+  if (jjDir === null) return { root: null, error: null };
+  return { root: null, error: `.jj is present in ${jjDir} but jj root named no workspace` };
 }
 
 /** The commit id `revset` resolves to in the workspace at `root`, or null. */
@@ -1227,14 +1258,45 @@ function jjCommitId(root, revset) {
   return /^[0-9a-f]{40}$/.test(id) ? id : null;
 }
 
-/** The working-copy commit's description at `root`, or null when unreadable. */
-function jjDescription(root) {
+/** The description of `revset` (the working copy by default) at `root`, or null. */
+function jjDescription(root, revset = "@") {
   const result = spawnSync(
     "jj",
-    ["--repository", root, "log", "-r", "@", "--no-graph", "-T", "description"],
+    ["--repository", root, "log", "-r", revset, "--no-graph", "-T", "description"],
     { encoding: "utf8" },
   );
   return result.status === 0 ? (result.stdout || "").trim() : null;
+}
+
+/**
+ * True when the local bookmark `name` at `root` tracks a remote bookmark, so
+ * the user published it elsewhere: moving it backwards would rewrite a ref
+ * other people already see. `exact:` keeps the match to that one name. A jj
+ * that cannot answer (the revset is unsupported) is reported as "no remote":
+ * the description check below still guards what this command may move.
+ */
+function jjBookmarkTracksRemote(root, name) {
+  const result = spawnSync(
+    "jj",
+    [
+      "--repository",
+      root,
+      "log",
+      "-r",
+      `tracked_remote_bookmarks(exact:"${name}")`,
+      "--no-graph",
+      "-T",
+      "commit_id",
+    ],
+    { encoding: "utf8" },
+  );
+  return result.status === 0 && (result.stdout || "").trim() !== "";
+}
+
+/** The first non-empty line of `text`, trimmed, or "" when there is none. */
+function firstLine(text) {
+  const line = `${text || ""}`.split(/\r?\n/).find((entry) => entry.trim() !== "");
+  return line === undefined ? "" : line.trim();
 }
 
 /** The last non-empty line of a failed command's output, for a one-line error. */
@@ -1243,6 +1305,12 @@ function failedLine(result) {
     .split(/\r?\n/)
     .filter((line) => line.trim() !== "");
   return lines.length === 0 ? `exit ${result.status}` : lines[lines.length - 1];
+}
+
+/** jj's first stderr line (then stdout's), for the one-line error of a refusal. */
+function firstFailedLine(result) {
+  const line = firstLine(result.stderr) || firstLine(result.stdout);
+  return line === "" ? `exit ${result.status}` : line;
 }
 
 /**
@@ -1258,6 +1326,21 @@ function failedLine(result) {
  * tracks `@` in both directions), let Jujutsu export bookmarks into Git, and
  * then check with Git itself that the ref resolves to exactly the `@` commit
  * id. Only that last check makes a sync successful.
+ *
+ * A bookmark this function may move is one yukl owns, so a bookmark the user
+ * owns is refused before anything is written (the bookmark stays where it is):
+ *
+ * - the default working-copy bookmark `yukl-wc`, whose ref Git already names -
+ *   the previous published `@` - is yukl's own, whatever description `@`
+ *   carries (the author's own message is never overwritten, and might mention
+ *   nothing about yukl); or
+ * - any other bookmark whose commit carries the yukl message, which is what a
+ *   custom `--bookmark` name was published with before.
+ *
+ * Everything else - `main`, say - is a branch the user owns: it is refused when
+ * it tracks a remote (moving it would rewrite what others see) or when its
+ * commit is described with something else (or not at all), because
+ * `--allow-backwards` would then drag a real branch back onto `@`.
  *
  * Returns `{ ok: true, synced: false, reason }` when `cwd` holds no Jujutsu
  * workspace (nothing to publish, and not an error), `{ ok: false, error }`
@@ -1288,6 +1371,34 @@ export function syncJjWorkingCopy({
   const ref = `refs/heads/${bookmark}`;
   const before = git(["rev-parse", "--verify", "--quiet", ref], root);
   const wasAt = before.status === 0 ? (before.stdout || "").trim() : null;
+
+  // The refusal comes before every write: a bookmark the user owns must not be
+  // described, moved or exported by this function.
+  const existing = jjCommitId(root, bookmark);
+  if (existing !== null) {
+    if (jjBookmarkTracksRemote(root, bookmark)) {
+      return {
+        ok: false,
+        error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
+      };
+    }
+    // `yukl-wc` is yukl's own ref: Git already naming it is the previous
+    // published @, so it is movable whatever `@` is described with.
+    const owned = bookmark === JJ_WC_BOOKMARK && wasAt !== null;
+    const bookmarkDescription = jjDescription(root, bookmark);
+    if (!owned && bookmarkDescription !== message) {
+      const why =
+        bookmarkDescription === null
+          ? "its commit cannot be read"
+          : `its commit carries the description "${firstLine(bookmarkDescription)}"`;
+      return {
+        ok: false,
+        error:
+          `refusing to move the existing bookmark ${bookmark} in ${root}: ${why}, ` +
+          "which is not a yukl working-copy publication",
+      };
+    }
+  }
 
   const description = jjDescription(root);
   if (description === null) {

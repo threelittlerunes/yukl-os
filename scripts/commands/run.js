@@ -21,6 +21,9 @@
 // working copy into Git first (see withWorkingCopySync): Orca branches a
 // worker's worktree from a Git ref, and work that lives only in the
 // working-copy commit would otherwise be invisible to the agent.
+// In a jj workspace the worker therefore branches from the published
+// working-copy ref even when --base is given (--base governs only config,
+// policy and enforcement).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
