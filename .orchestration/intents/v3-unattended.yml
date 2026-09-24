@@ -1,0 +1,29 @@
+intent:
+  goal: "Implement Phase 3 (Autonomous Orchestration) as described in INTENT.md: yukl run --unattended drives one task until it is terminal, needs a human, escalates or breaches a run limit; a scheduler runs tasks with non-overlapping allowed_paths in parallel worktrees and serialises overlapping ones; a minimal advisory lock broker guards .orchestration/locks/. Remove maxTokensPerRun; keep maxWallMinutesPerRun (default 120) and maxAgentStartsPerRun (default 12) as enforced run limits, with null still refusing --unattended."
+  depends_on:
+    - "v3-w2-vcs-sync"
+  scope:
+    allowed_paths:
+      - "scripts/**"
+      - "tests/**"
+      - "templates/**"
+      - "yukl.policy.json"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/v3-unattended.json"
+    forbidden_paths:
+      - "INTENT.md"
+      - "yukl.config.json"
+      - "orca.yaml"
+      - "flow.config.json"
+      - "package.json"
+      - "package-lock.json"
+      - ".orchestration/intents/**"
+      - ".github/**"
+      - ".claude/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+
+consultation:
+  requires_human_approval: true
