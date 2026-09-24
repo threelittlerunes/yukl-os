@@ -255,6 +255,51 @@ test("run --once drives one stage with the configured adapter and agent", async 
 });
 
 // ---------------------------------------------------------------------------
+// no Jujutsu workspace: the working-copy sync hook stays off
+// ---------------------------------------------------------------------------
+
+test("run in a repo with no Jujutsu workspace leaves jjBase null and publishes nothing", async () => {
+  await withTempDir(async (dir) => {
+    writeRepo(dir, { seed: SEED_TO_IMPLEMENT });
+
+    const jjBases = [];
+    const starts = [];
+    const { code, out } = await capture(() =>
+      run([TASK, "--once", "--cwd", dir], {
+        createRuntime: (entry, context) => {
+          jjBases.push(context.jjBase);
+          return {
+            start: (dispatch) => {
+              starts.push(dispatch);
+              return "run-1";
+            },
+            status: () => "exited",
+            result: () => ({ exitCode: 0 }),
+            stop: () => {},
+          };
+        },
+      }),
+    );
+    assert.equal(code, 0, out);
+    assert.deepEqual(
+      jjBases,
+      [null],
+      "a plain Git repository has no jj base, so no sync wrapper is applied",
+    );
+    assert.match(out, /yukl run: started at implement/, "existing run behaviour is unchanged");
+    assert.equal(starts.length, 1, "the runtime is started exactly once");
+
+    // Nothing was published, so the working-copy branch never appears here.
+    const ref = spawnSync(
+      "git",
+      [...GIT_IDENTITY, "rev-parse", "--verify", "--quiet", "refs/heads/yukl-wc"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    assert.notEqual(ref.status, 0, "no working-copy ref is created without a Jujutsu workspace");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // must reject: an unattended run with unset budgets starts no adapter
 // ---------------------------------------------------------------------------
 

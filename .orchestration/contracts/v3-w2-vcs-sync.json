@@ -14,6 +14,8 @@
     ".orchestration/contracts/v3-w2-vcs-sync.json",
     "scripts/commands/run.js",
     "scripts/commands/vcs-sync.js",
-    "scripts/yukl.js"
+    "scripts/yukl.js",
+    "tests/command-run.test.js",
+    "tests/command-vcs-sync.test.js"
   ]
 }
