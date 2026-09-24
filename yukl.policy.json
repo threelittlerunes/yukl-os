@@ -20,9 +20,8 @@
     "maxAttemptsPerStage": 3
   },
   "budgets": {
-    "maxWallMinutesPerRun": null,
-    "maxTokensPerRun": null,
-    "maxAgentStartsPerRun": null
+    "maxWallMinutesPerRun": 120,
+    "maxAgentStartsPerRun": 12
   },
   "trackRecord": {
     "levels": [{ "level": 1, "minCleanRuns": 5 }]
