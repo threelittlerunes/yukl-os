@@ -196,6 +196,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `yukl verify --base` now warns on stderr when the working tree carries
   uncommitted or untracked changes, since the preview checks committed state
   only (base...HEAD) (task B3).
+- The lock broker's stale reclaim is atomic against a rival acquirer: reclaim
+  now runs under an exclusive `<name>.lock.reclaim` guard and re-reads the lock
+  before removing it, so two acquirers that both see a dead owner can no longer
+  both remove and both end up holding the lock; a stale guard is reclaimed like
+  any stale lock (v3-unattended).
+- The unattended-loop tests fail fast instead of hanging when a run limit stops
+  firing: their fake sleep and fake runtime are bounded, so a loop with no exit
+  throws after a generous number of polls or agent starts. An immediately
+  resolving sleep starves the event loop, which is why the test runner's own
+  timeout could never end the hang (v3-unattended).
+- `yukl schedule` reads each task's intent from `--base` through `git show`, as
+  `yukl run --base` reads its config and policy, so a task branch can no longer
+  widen the `allowed_paths` its own scheduling is planned from; without `--base`
+  the working tree stays a documented local preview (v3-unattended).
 
 ### Planned
 - Scheduled artifact purge implementing the retention policy in

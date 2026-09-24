@@ -441,6 +441,14 @@ stops the run, which exits 1; nothing is killed and nothing is penalised beyond
 that stop, and because the count is run-scoped, a later run of the same task
 starts with the limit unspent.
 
+The limits bound every run, attended as well as unattended: `yukl run` hands the
+policy's two values to the loop whatever its mode, the wall-clock check and the
+agent-start refusal run on every step, and a breach records the same
+`enforcement` event and stops the run with the same exit code. `--unattended`
+changes only what the loop does between steps - it waits for a running stage
+instead of stopping on it - and it is the only mode that is refused while a
+limit is unset.
+
 ### 4.8 The event log
 <!-- status: implemented tests=tests/lifecycle-events.test.js#editing any byte of an earlier line makes verifyChain fail naming that line -->
 
@@ -514,6 +522,15 @@ refused. There is no queue file and no daemon: the positional task ids are the
 whole input, so a scheduled run is as reproducible as the shell history that
 started it.
 
+With `--base`, each task's intent is read from that ref through `git show`,
+exactly as `yukl run --base` reads its `lifecycle` block and its policy, so a
+task branch cannot widen the `allowed_paths` its own scheduling is planned from
+- an intent edited only in the working tree is ignored. Without `--base` the
+working tree is read, which makes local mode a developer preview rather than a
+trust boundary: the scheduler then plans the waves from whatever the checkout
+says. `--base` is also passed on to every task's `yukl run`, so the same ref
+governs what each task is allowed to do once it starts.
+
 ### 4.14 The advisory lock broker
 <!-- status: implemented tests=tests/lifecycle-locks.test.js#a lock whose owner process is gone is reclaimed, not respected -->
 
@@ -534,6 +551,18 @@ taken on trust beyond that: a lock file that cannot be parsed is refused rather
 than reclaimed, because guessing would hand out a lock another process may still
 hold. The clock, the process id, the host and the liveness check are injectable,
 so the behaviour is tested without a real process, a real clock or a real crash.
+
+Reclaiming is not atomic with the inspection that found the owner dead, so it
+goes through a second lock file, `<name>.lock.reclaim`, taken exclusively by the
+one acquirer that may remove the stale lock. Two acquirers that both see the
+same dead owner therefore cannot both remove: the loser is refused with the lock
+reported held, and if it waits it re-inspects the winner's fresh lock and finds
+it live. The guard holder re-reads the lock under the guard and removes it only
+while it still names the same dead owner, so a lock that changed hands since the
+inspection is left alone rather than deleted; a lock that cannot be re-read as
+the same record is never removed. The guard records its own owner like any lock,
+so a reclaimer that crashed mid-reclaim leaves a stale guard that the next
+acquirer reclaims in turn rather than a permanent wedge.
 
 ### 4.15 Known limits
 <!-- status: background -->

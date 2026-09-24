@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run as runLock, describeHolder } from "../scripts/commands/lock.js";
@@ -10,6 +10,7 @@ import {
   isLockName,
   isProcessAlive,
   lockPath,
+  reclaimPath,
   releaseLock,
 } from "../scripts/lifecycle/locks.js";
 import { dispatchCommand } from "../scripts/yukl.js";
@@ -219,6 +220,126 @@ test("an unreadable lock is refused, never reclaimed", async () => {
     assert.equal(release.reason, "unreadable");
     assert.equal(releaseLock({ dir, name: "install", pid: 222, force: true }).released, true);
     assert.equal(inspectLock(dir, "install").state, "absent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reclaim race: two acquirers that both see a dead owner
+// ---------------------------------------------------------------------------
+
+test("two acquirers that both see a dead owner cannot both hold the lock", async () => {
+  await withTempDir((dir) => {
+    // A dead owner holds the lock; both acquirers would see it as stale.
+    acquireLock({ dir, name: "install", task: "dead", pid: 111, host: "host-a", clock: CLOCK });
+
+    const alive = (pid) => pid !== 111;
+    // The rival runs inside the hook, at the dangerous point: this acquirer
+    // holds the reclaim guard and has just re-read the stale lock, and is about
+    // to remove it. Without the guard the rival would remove the lock and
+    // create its own here, and this acquirer's rmSync would then delete that
+    // live lock - both would report success.
+    let rival = null;
+    let rivalRuns = 0;
+    const first = acquireLock({
+      dir,
+      name: "install",
+      task: "first",
+      pid: 333,
+      host: "host-c",
+      clock: CLOCK,
+      alive,
+      beforeReclaim: ({ phase }) => {
+        if (phase !== "remove") return;
+        rivalRuns += 1;
+        if (rival !== null) return;
+        assert.equal(inspectLock(dir, "install").state, "held", "the stale lock is still there");
+        rival = acquireLock({
+          dir,
+          name: "install",
+          task: "rival",
+          pid: 222,
+          host: "host-b",
+          clock: CLOCK,
+          alive,
+        });
+      },
+    });
+
+    assert.equal(rivalRuns, 1, "the interleave happens exactly once");
+    assert.equal(first.ok, true, "exactly one acquirer holds the lock");
+    assert.equal(first.owner.pid, 333);
+    assert.equal(rival.ok, false, "the rival does not hold the lock");
+    assert.equal(rival.reason, "held", "the rival reports the lock held");
+    assert.equal(
+      [first.ok, rival.ok].filter(Boolean).length,
+      1,
+      "exactly one of the two acquirers holds the lock",
+    );
+    assert.equal(JSON.parse(readFileSync(lockPath(dir, "install"), "utf8")).pid, 333);
+    assert.equal(
+      readdirSync(dir).includes("install.lock.reclaim"),
+      false,
+      "the reclaim guard is released once the reclaim settles",
+    );
+  });
+});
+
+test("a lock that changed hands while the reclaim was guarded is not removed", async () => {
+  await withTempDir((dir) => {
+    acquireLock({ dir, name: "install", task: "dead", pid: 111, host: "host-a", clock: CLOCK });
+
+    const live = { name: "install", pid: 444, host: "host-d", task: "winner", at: FIXED_AT };
+    const refused = acquireLock({
+      dir,
+      name: "install",
+      task: "late",
+      pid: 333,
+      host: "host-c",
+      clock: CLOCK,
+      alive: (pid) => pid !== 111,
+      // The lock changes hands while the guard is held and before the re-read
+      // that would act on the dead owner, so the removal must not happen.
+      beforeReclaim: ({ phase, path }) => {
+        if (phase !== "inspect") return;
+        writeFileSync(path, `${JSON.stringify(live)}\n`);
+      },
+    });
+
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, "held");
+    assert.equal(refused.holder.pid, 444, "the new live owner is reported");
+    assert.deepEqual(JSON.parse(readFileSync(lockPath(dir, "install"), "utf8")), live);
+  });
+});
+
+test("a reclaim guard left by a crashed reclaimer is reclaimed in turn", async () => {
+  await withTempDir((dir) => {
+    acquireLock({ dir, name: "install", task: "dead", pid: 111, host: "host-a", clock: CLOCK });
+    // A reclaimer that crashed between taking the guard and finishing.
+    writeFileSync(
+      reclaimPath(dir, "install"),
+      `${JSON.stringify({ name: "install", pid: 555, host: "host-x", task: "dead", at: FIXED_AT })}\n`,
+    );
+
+    const reclaim = acquireLock({
+      dir,
+      name: "install",
+      task: "alive",
+      pid: 222,
+      host: "host-b",
+      clock: CLOCK,
+      alive: (pid) => pid !== 111 && pid !== 555,
+    });
+
+    assert.equal(reclaim.ok, true);
+    assert.equal(reclaim.reclaimed, true);
+    assert.equal(reclaim.holder.pid, 111, "the dead lock owner is reported");
+    assert.equal(JSON.parse(readFileSync(lockPath(dir, "install"), "utf8")).pid, 222);
+    assert.deepEqual(
+      readdirSync(dir).filter((entry) => entry.endsWith(".reclaim")),
+      [],
+      "the stale guard is gone",
+    );
   });
 });
 

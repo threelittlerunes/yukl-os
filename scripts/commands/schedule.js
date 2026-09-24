@@ -16,6 +16,12 @@
 // be read has an unknown scope, and an unknown scope overlaps everything, so
 // such a task runs alone rather than racing a task it might collide with.
 //
+// With `--base` each task's intent is read from that ref through `git show`,
+// exactly as `yukl run --base` reads its lifecycle block and policy, so a task
+// branch cannot widen the scope its own scheduling is planned from; without
+// `--base` the working tree is read, which makes local mode a developer preview
+// rather than a trust boundary. `--base` is passed on to every task's run.
+//
 // Before a task runs, its id is taken as an advisory lock in `<locks-dir>` (see
 // scripts/lifecycle/locks.js), so a second scheduler - or an agent that took the
 // same lock by hand - cannot drive the same task twice; the lock is released
@@ -146,14 +152,28 @@ export function planWaves(tasks) {
 /**
  * The `allowed_paths` of a task's intent, or null when it cannot be read or
  * carries none. A missing or malformed intent is an unknown scope rather than
- * an error: the task still runs, alone.
+ * an error: the task still runs, alone. With `base` the intent is read from
+ * that ref through `git show` (argument array, no shell), so a task branch
+ * cannot widen the scope its own scheduling is planned from; without `base` the
+ * working tree is read, which makes local mode a developer preview rather than
+ * a trust boundary.
  */
-export function readIntentScope(cwd, taskId) {
+export function readIntentScope(cwd, taskId, base = null) {
+  const intentRelPath = `${INTENTS_DIR}/${taskId}.yml`;
   let text;
-  try {
-    text = readFileSync(join(cwd, INTENTS_DIR, `${taskId}.yml`), "utf8");
-  } catch {
-    return null;
+  if (base != null) {
+    const shown = spawnSync("git", ["show", `${base}:${intentRelPath}`], {
+      cwd,
+      encoding: "utf8",
+    });
+    if (shown.status !== 0) return null;
+    text = shown.stdout;
+  } else {
+    try {
+      text = readFileSync(join(cwd, intentRelPath), "utf8");
+    } catch {
+      return null;
+    }
   }
   try {
     const doc = yaml.load(text);
@@ -236,7 +256,7 @@ export async function run(argv = [], overrides = {}) {
 
   const tasks = parsed.taskIds.map((taskId) => ({
     taskId,
-    allowedPaths: overrides.scopes?.[taskId] ?? readIntentScope(cwd, taskId),
+    allowedPaths: overrides.scopes?.[taskId] ?? readIntentScope(cwd, taskId, base),
   }));
   const waves = planWaves(tasks);
   const results = [];

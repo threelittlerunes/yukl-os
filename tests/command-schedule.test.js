@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +18,30 @@ import { acquireLock, inspectLock } from "../scripts/lifecycle/locks.js";
 
 const FIXED_AT = "2026-01-01T00:00:00.000Z";
 const CLOCK = () => new Date(FIXED_AT);
+const GIT_IDENTITY = ["-c", "user.email=yukl-test@example.invalid", "-c", "user.name=Yukl Test"];
+
+/** Run git in a temp repo, throwing on failure. */
+function git(args, cwd) {
+  const result = spawnSync("git", [...GIT_IDENTITY, ...args], { cwd, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+}
+
+/** Write a task intent carrying `allowedPaths`, as the repo's intents do. */
+function writeIntent(dir, taskId, allowedPaths) {
+  const intents = join(dir, ".orchestration", "intents");
+  mkdirSync(intents, { recursive: true });
+  writeFileSync(
+    join(intents, `${taskId}.yml`),
+    `intent:\n  scope:\n    allowed_paths:\n${allowedPaths.map((p) => `      - "${p}"`).join("\n")}\n`,
+  );
+}
+
+/** Commit the whole working tree, so `HEAD` has the intents written so far. */
+function commitAll(dir) {
+  git(["init", "-q"], dir);
+  git(["add", "-A"], dir);
+  git(["commit", "-q", "-m", "seed intents"], dir);
+}
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "yukl-schedule-"));
@@ -156,6 +181,51 @@ test("readIntentScope reads intent.scope.allowed_paths and fails closed", async 
       "intent:\n  scope:\n    allowed_paths:\n      - 7\n",
     );
     assert.equal(readIntentScope(dir, "entries"), null, "a non-string entry has no scope");
+  });
+});
+
+test("readIntentScope reads the intent from --base and not from a widened working tree", async () => {
+  await withTempDir((dir) => {
+    writeIntent(dir, "task-a", ["tests/**"]);
+    commitAll(dir);
+    // A task branch that rewrites its own intent in the working tree to widen
+    // its scope must not widen the scope the scheduler reads.
+    writeIntent(dir, "task-a", ["**"]);
+
+    assert.deepEqual(
+      readIntentScope(dir, "task-a", "HEAD"),
+      ["tests/**"],
+      "with --base the committed intent wins",
+    );
+    assert.deepEqual(
+      readIntentScope(dir, "task-a"),
+      ["**"],
+      "without --base the working tree is read, as a local preview",
+    );
+    assert.equal(readIntentScope(dir, "task-b", "HEAD"), null, "an intent absent at base has none");
+  });
+});
+
+test("schedule reads each task's scope from --base, so a branch cannot widen its own", async () => {
+  await withTempDir(async (dir) => {
+    writeIntent(dir, "alpha", ["tests/**"]);
+    writeIntent(dir, "beta", ["scripts/**"]);
+    commitAll(dir);
+    writeIntent(dir, "alpha", ["scripts/**"]);
+
+    // Committed, alpha and beta cannot overlap, so they share a wave. The
+    // working-tree edit would put alpha in beta's scope and serialise them.
+    const committed = await capture(() =>
+      runSchedule(["alpha", "beta", "--base", "HEAD"], harness(dir, [], { scopes: {} })),
+    );
+    assert.equal(committed.code, 0, committed.err);
+    assert.match(committed.out, /schedule: wave alpha beta/);
+
+    const preview = await capture(() =>
+      runSchedule(["alpha", "beta"], harness(dir, [], { scopes: {} })),
+    );
+    assert.equal(preview.code, 0, preview.err);
+    assert.doesNotMatch(preview.out, /wave alpha beta/, "the edited scope serialises them");
   });
 });
 
