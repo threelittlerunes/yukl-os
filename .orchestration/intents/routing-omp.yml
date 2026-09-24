@@ -1,0 +1,25 @@
+intent:
+  goal: "Route every drafting runtime to omp and remove opencode from the harness configs, test fixtures and documentation examples. The ALLOWED_AGENTS list in scripts/repo-checks.js keeps opencode so other users of the harness can still choose it."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "flow.config.json"
+      - "orca.yaml"
+      - "yukl.config.json"
+      - "scripts/repo-checks.js"
+      - "tests/**"
+      - ".github/ISSUE_TEMPLATE/bug_report.md"
+      - ".orchestration/artifacts/README.md"
+      - "docs/intents/README.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/routing-omp.json"
+    forbidden_paths:
+      - "docs/AUDIT_REPORT.md"
+      - "package.json"
+      - "package-lock.json"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+
+consultation:
+  requires_human_approval: false

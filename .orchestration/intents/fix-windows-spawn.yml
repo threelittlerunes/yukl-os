@@ -1,0 +1,14 @@
+  intent:
+    goal: "Apply the final fix to the Windows spawn bug in scripts/yukl.js. You MUST do exactly two things: 1) Change the 'close' event listener to an 'exit' event listener in runCommand (i.e. find `child.on('close', ...)` and change it to `child.on('exit', ...)`). This is required because background processes like npm's update-notifier keep stdio pipes open, meaning 'close' never fires on Windows. 2) Change the stdio array to ['ignore', 'pipe', 'pipe'] and actively read the streams to prevent buffers from filling. Do not miss the 'exit' change."
+    depends_on: []
+    scope:
+      allowed_paths:
+        - "scripts/yukl.js"
+        - ".orchestration/contracts/fix-windows-spawn.json"
+      forbidden_paths:
+        - "package.json"
+        - "CLAUDE.md"
+        - "AGENTS.md"
+
+  consultation:
+    requires_human_approval: false
