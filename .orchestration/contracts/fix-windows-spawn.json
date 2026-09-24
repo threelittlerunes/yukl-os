@@ -1,0 +1,8 @@
+{
+  "task_id": "fix-windows-spawn",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [".orchestration/contracts/fix-windows-spawn.json", "scripts/yukl.js"]
+}

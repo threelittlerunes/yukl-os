@@ -543,9 +543,13 @@ function runCommand(command, cwd, timeoutMs = 600000) {
     const child = spawn(command, {
       shell: true,
       cwd,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    // A piped stream nobody reads fills its OS buffer and blocks the child
+    // forever, so stdout is drained and discarded: the gate judges the exit
+    // code and reports stderr, but both pipes have to keep flowing.
+    child.stdout.resume();
     let stderr = "";
     let settled = false;
     const finish = (result) => {
@@ -572,7 +576,12 @@ function runCommand(command, cwd, timeoutMs = 600000) {
     child.on("error", (err) => {
       finish({ code: null, stderr: `${stderr}${err.message}` });
     });
-    child.on("close", (code) => {
+    // `exit`, not `close`: `close` also waits for every stdio pipe to reach
+    // EOF, so any process that outlives the command while holding a pipe -
+    // npm's update-notifier, for one - keeps the gate blocked until its own
+    // timeout. `exit` reports the command's own exit code the moment the
+    // command has exited.
+    child.on("exit", (code) => {
       finish({ code, stderr });
     });
   });
