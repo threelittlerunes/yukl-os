@@ -328,6 +328,121 @@ test("vcs-sync exits 0 and publishes nothing in a plain Git repository", async (
 });
 
 // ---------------------------------------------------------------------------
+// jjWorkspaceRoot fails closed: an unreadable workspace is never "plain Git"
+// ---------------------------------------------------------------------------
+
+/** Hide jj from PATH for the duration of `fn`, so it cannot be run at all. */
+async function withoutJj(dir, fn) {
+  const path = process.env.PATH;
+  const emptyPath = join(dir, "empty-path");
+  mkdirSync(emptyPath);
+  try {
+    process.env.PATH = emptyPath;
+    return await fn();
+  } finally {
+    process.env.PATH = path;
+  }
+}
+
+test("jjWorkspaceRoot reports no workspace for a tree without .jj, even with jj unrunnable", async () => {
+  await withTempDir(async (dir) => {
+    // No .jj anywhere: jj failing is what plain Git looks like, so the caller
+    // must not be told a workspace exists that it could not publish.
+    await withoutJj(dir, () => {
+      assert.deepEqual(jjWorkspaceRoot(dir), { root: null, error: null });
+    });
+    assert.deepEqual(jjWorkspaceRoot(dir), { root: null, error: null });
+    assert.deepEqual(jjWorkspaceRoot(join(dir, "does", "not", "exist")), {
+      root: null,
+      error: null,
+    });
+  });
+});
+
+test("jjWorkspaceRoot fails closed when .jj is in cwd and jj cannot be run", async () => {
+  await withTempDir(async (dir) => {
+    const workspace = join(dir, "workspace");
+    mkdirSync(join(workspace, ".jj"), { recursive: true });
+
+    await withoutJj(dir, () => {
+      const located = jjWorkspaceRoot(workspace);
+      assert.equal(located.root, null, "an unreadable workspace resolves to no root");
+      assert.match(located.error, /\.jj is present in /);
+      assert.ok(located.error.includes(workspace), "the error names the directory holding .jj");
+      assert.match(located.error, /jj could not be run/);
+    });
+  });
+});
+
+test("jjWorkspaceRoot fails closed when .jj is in a parent directory and jj cannot be run", async () => {
+  await withTempDir(async (dir) => {
+    const workspace = join(dir, "workspace");
+    const cwd = join(workspace, "sub", "deeper");
+    mkdirSync(join(workspace, ".jj"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+
+    await withoutJj(dir, () => {
+      const located = jjWorkspaceRoot(cwd);
+      assert.equal(located.root, null);
+      assert.ok(
+        located.error.includes(workspace),
+        "the walk up the tree names the directory that holds .jj",
+      );
+      assert.ok(!located.error.includes(cwd), "the error names that directory, not the cwd");
+      assert.match(located.error, /jj could not be run/);
+    });
+  });
+});
+
+test(
+  "jjWorkspaceRoot fails closed and names jj's first stderr line when jj root exits non-zero",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      // A .jj that is not a real workspace: jj finds the marker and then fails,
+      // which is the case that used to pass as "no workspace at all".
+      const workspace = join(dir, "parent");
+      mkdirSync(join(workspace, ".jj"), { recursive: true });
+      writeFileSync(join(workspace, ".jj", "repo"), "not a workspace\n");
+      const cwd = join(workspace, "sub", "deeper");
+      mkdirSync(cwd, { recursive: true });
+
+      const direct = spawnSync("jj", ["root"], { cwd, encoding: "utf8" });
+      assert.notEqual(direct.status, 0, "the fixture makes jj root fail");
+      const firstStderr = direct.stderr
+        .split(/\r?\n/)
+        .find((line) => line.trim() !== "")
+        .trim();
+
+      for (const [where, from] of [
+        ["a subdirectory", cwd],
+        ["the workspace directory", workspace],
+      ]) {
+        const located = jjWorkspaceRoot(from);
+        assert.equal(located.root, null, `no root from ${where}`);
+        assert.match(located.error, /\.jj is present in /);
+        assert.ok(located.error.includes(workspace), `the error from ${where} names the directory`);
+        assert.ok(
+          located.error.includes(firstStderr),
+          `the error from ${where} names jj's first stderr line`,
+        );
+        assert.match(located.error, /jj root failed: /);
+      }
+
+      // The command refuses instead of publishing, and says so on stderr.
+      const cli = runCli(["vcs-sync", "--cwd", cwd]);
+      assert.equal(cli.status, 1, cli.stdout);
+      assert.match(cli.stderr, /\.jj is present in /);
+      assert.ok(cli.stderr.includes(workspace));
+
+      const json = runCli(["vcs-sync", "--cwd", cwd, "--json"]);
+      assert.equal(json.status, 1);
+      assert.equal(JSON.parse(json.stdout.trim()).ok, false);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
 // the real jj binary: publication of a colocated working copy
 // ---------------------------------------------------------------------------
 
@@ -448,6 +563,138 @@ test(
         now,
         "the jj bookmark itself names @",
       );
+    });
+  },
+);
+
+test("syncJjWorkingCopy refuses to move a bookmark the user owns", { skip: JJ_SKIP }, async () => {
+  await withTempDir(async (dir) => {
+    colocatedRepo(dir);
+    writeFileSync(join(dir, "README.md"), "base\n");
+    jj(dir, ["describe", "-m", "base"]);
+    jj(dir, ["bookmark", "create", "main", "-r", "@"]);
+    const main = jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]);
+    // The user keeps working, so @ moves ahead of the branch they own.
+    jj(dir, ["new"]);
+    jj(dir, ["describe", "-m", ""]);
+    const workingCopy = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+    assert.notEqual(workingCopy, main, "main is behind @");
+
+    const refused = syncJjWorkingCopy({ cwd: dir, bookmark: "main" });
+    assert.equal(refused.ok, false, "a user bookmark is never moved");
+    assert.match(refused.error, /refusing to move the existing bookmark main/);
+    assert.match(refused.error, /carries the description "base"/);
+    assert.match(refused.error, /not a yukl working-copy publication/);
+
+    // The refusal writes nothing at all: the branch, its Git ref and the
+    // working copy are exactly where the user left them.
+    assert.equal(jjOut(dir, ["log", "-r", "main", "--no-graph", "-T", "commit_id"]), main);
+    assert.equal(gitOut(["rev-parse", "refs/heads/main"], dir), main);
+    assert.equal(jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]), workingCopy);
+    assert.equal(
+      jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
+      "",
+      "the working copy is not described either",
+    );
+    assert.equal(
+      jjOut(dir, ["bookmark", "list", JJ_WC_BOOKMARK, "-T", "name"]),
+      "",
+      "the sync created no working-copy bookmark of its own",
+    );
+
+    // The command reports the refusal as exit 1 rather than publishing.
+    const cli = runCli(["vcs-sync", "--cwd", dir, "--bookmark", "main"]);
+    assert.equal(cli.status, 1, cli.stdout);
+    assert.match(cli.stderr, /refusing to move the existing bookmark main/);
+  });
+});
+
+test(
+  "syncJjWorkingCopy refuses to move a bookmark that tracks a remote",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      const remote = join(dir, "remote.git");
+      git(["init", "-q", "--bare", remote], dir);
+      const workspace = join(dir, "ws");
+      colocatedRepo(workspace);
+      writeFileSync(join(workspace, "README.md"), "base\n");
+      jj(workspace, ["describe", "-m", "base"]);
+      jj(workspace, ["bookmark", "create", "shared", "-r", "@"]);
+      jj(workspace, ["git", "remote", "add", "origin", remote]);
+      jj(workspace, ["git", "push", "--bookmark", "shared"]);
+      jj(workspace, ["git", "fetch"]);
+      assert.notEqual(
+        jjOut(workspace, [
+          "log",
+          "-r",
+          'tracked_remote_bookmarks(exact:"shared")',
+          "--no-graph",
+          "-T",
+          "commit_id",
+        ]),
+        "",
+        "the fixture tracks origin/shared",
+      );
+
+      jj(workspace, ["new"]);
+      jj(workspace, ["describe", "-m", ""]);
+      const before = jjOut(workspace, ["log", "-r", "shared", "--no-graph", "-T", "commit_id"]);
+
+      const refused = syncJjWorkingCopy({ cwd: workspace, bookmark: "shared" });
+      assert.equal(refused.ok, false, "a branch someone else can see is never rewritten");
+      assert.match(refused.error, /refusing to move the existing bookmark shared/);
+      assert.match(refused.error, /it tracks a remote/);
+      assert.equal(
+        jjOut(workspace, ["log", "-r", "shared", "--no-graph", "-T", "commit_id"]),
+        before,
+        "the bookmark is untouched",
+      );
+      assert.equal(gitOut(["rev-parse", "refs/heads/shared"], workspace), before);
+    });
+  },
+);
+
+test(
+  "syncJjWorkingCopy fails closed when Git cannot confirm the exported ref",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      colocatedRepo(dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+
+      // jj publishes into its own store, while `git` is pointed at a different
+      // repository: the export itself succeeds, but the proof that Git resolves
+      // the ref cannot hold, and a sync that cannot prove itself must not pass.
+      const decoy = join(dir, "decoy");
+      git(["init", "-q", decoy], dir);
+      const gitDir = process.env.GIT_DIR;
+      process.env.GIT_DIR = decoy;
+      let refused;
+      try {
+        refused = syncJjWorkingCopy({ cwd: dir });
+      } finally {
+        if (gitDir === undefined) delete process.env.GIT_DIR;
+        else process.env.GIT_DIR = gitDir;
+      }
+
+      assert.equal(refused.ok, false);
+      assert.match(refused.error, /resolves to nothing but the Jujutsu working copy is /);
+      assert.match(refused.error, /the working copy was not published/);
+      // jj did move its own bookmark: only the Git-side proof failed.
+      assert.match(
+        jjOut(dir, ["log", "-r", JJ_WC_BOOKMARK, "--no-graph", "-T", "commit_id"]),
+        /^[0-9a-f]{40}$/,
+      );
+
+      // With Git back, the same sync publishes and proves it.
+      const published = syncJjWorkingCopy({ cwd: dir });
+      assert.equal(published.ok, true, published.error);
+      assert.equal(
+        published.commit,
+        jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]),
+      );
+      assert.equal(gitOut(["rev-parse", `refs/heads/${JJ_WC_BOOKMARK}`], dir), published.commit);
     });
   },
 );

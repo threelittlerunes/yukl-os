@@ -14,6 +14,7 @@ import {
   name as lifecycleName,
   validate as validateLifecycle,
 } from "../scripts/validators/lifecycle.js";
+import { JJ_WC_BOOKMARK } from "../scripts/yukl.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const YUKL = join(ROOT, "scripts", "yukl.js");
@@ -296,6 +297,66 @@ test("run in a repo with no Jujutsu workspace leaves jjBase null and publishes n
       { cwd: dir, encoding: "utf8" },
     );
     assert.notEqual(ref.status, 0, "no working-copy ref is created without a Jujutsu workspace");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// an unreadable Jujutsu workspace: the sync hook stays on, so a stale tip is
+// never branched
+// ---------------------------------------------------------------------------
+
+test("run under an unreadable Jujutsu workspace fails closed instead of branching from the tip", async () => {
+  await withTempDir(async (dir) => {
+    // `.jj` in a parent directory, and not a real workspace: whether jj is
+    // missing or reports that it cannot read it, this is not plain Git, so the
+    // run has to go through the working-copy sync (jjBase set) instead of
+    // handing the agent a branch tip that predates the working copy.
+    mkdirSync(join(dir, ".jj"), { recursive: true });
+    writeFileSync(join(dir, ".jj", "repo"), "not a workspace\n");
+
+    // The real dispatch path: the sync hook refuses before any agent starts.
+    const refused = join(dir, "refused");
+    mkdirSync(refused);
+    const repo = writeRepo(refused, { seed: SEED_TO_IMPLEMENT });
+
+    const blocked = await capture(() => run([TASK, "--once", "--cwd", refused]));
+    assert.equal(blocked.code, 1, blocked.out);
+    assert.match(blocked.err, /refusing to dispatch an agent/);
+    assert.match(blocked.err, /\.jj is present in /);
+    const mod = await import(repo.fakeAdapterUrl);
+    assert.equal(mod.starts.length, 0, "no agent is started from an unprovable base");
+    const ref = spawnSync(
+      "git",
+      [...GIT_IDENTITY, "rev-parse", "--verify", "--quiet", `refs/heads/${JJ_WC_BOOKMARK}`],
+      { cwd: refused, encoding: "utf8" },
+    );
+    assert.notEqual(ref.status, 0, "an unreadable workspace publishes nothing");
+
+    // And the base the run is built against is the working-copy ref, not the
+    // null that made the dispatcher branch from a stale tip.
+    const observed = join(dir, "observed");
+    mkdirSync(observed);
+    writeRepo(observed, { seed: SEED_TO_IMPLEMENT });
+    const jjBases = [];
+    const unguarded = await capture(() =>
+      run([TASK, "--once", "--cwd", observed], {
+        createRuntime: (entry, context) => {
+          jjBases.push(context.jjBase);
+          return {
+            start: () => "run-1",
+            status: () => "exited",
+            result: () => ({ exitCode: 0 }),
+            stop: () => {},
+          };
+        },
+      }),
+    );
+    assert.deepEqual(
+      jjBases,
+      [JJ_WC_BOOKMARK],
+      "the run is built against the working-copy ref, not the branch tip",
+    );
+    assert.equal(unguarded.code, 0, unguarded.err);
   });
 });
 
