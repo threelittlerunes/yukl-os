@@ -16,6 +16,14 @@
 // tree otherwise, which makes a bare run a local preview rather than a trust
 // boundary. `--unattended` is refused before any adapter is started unless
 // every run budget is a positive integer: an unbounded run must stay attended.
+//
+// In a colocated Jujutsu workspace every agent start publishes the Jujutsu
+// working copy into Git first (see withWorkingCopySync): Orca branches a
+// worker's worktree from a Git ref, and work that lives only in the
+// working-copy commit would otherwise be invisible to the agent.
+// In a jj workspace the worker therefore branches from the published
+// working-copy ref even when --base is given (--base governs only config,
+// policy and enforcement).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -33,7 +41,13 @@ import {
 import { loadAdapter } from "../lifecycle/runtime.js";
 import * as stages from "../lifecycle/stages.js";
 import { autonomyLevel, trackRecord } from "../lifecycle/track.js";
-import { CONTRACTS_DIR, yuklConfigViolations } from "../yukl.js";
+import {
+  CONTRACTS_DIR,
+  JJ_WC_BOOKMARK,
+  jjWorkspaceRoot,
+  syncJjWorkingCopy,
+  yuklConfigViolations,
+} from "../yukl.js";
 import { lifecycleViolations } from "../validators/lifecycle.js";
 
 const CONFIG_FILE = "yukl.config.json";
@@ -245,14 +259,37 @@ function makeEnforce({ cwd, base, taskId }) {
   };
 }
 
+/**
+ * Wrap a runtime so every agent start first publishes the Jujutsu working copy
+ * into Git. Orca branches a worker's worktree from a Git ref, so a base ref
+ * that predates the human's working-copy commit hands the agent a stale tree
+ * without any error. The sync runs immediately before the start it guards, so
+ * a long run that dispatches several stages publishes the state as it is at
+ * each dispatch; a sync that cannot be proven refuses the dispatch (a worker
+ * branching from an unknown state is the failure this exists to prevent). The
+ * sync publishes a ref and never edits `@`, so a work-in-progress commit the
+ * human left undescribed is handed over exactly as it is. `status`, `result`
+ * and `stop` stay on the wrapped runtime untouched.
+ */
+export function withWorkingCopySync(runtime, { cwd, bookmark }) {
+  const syncFirst = Object.create(runtime);
+  syncFirst.start = function start(dispatch) {
+    const sync = syncJjWorkingCopy({ cwd, bookmark });
+    if (!sync.ok) throw new Error(`refusing to dispatch an agent: ${sync.error}`);
+    return runtime.start(dispatch);
+  };
+  return syncFirst;
+}
+
 /** Load the runtime adapter for one lifecycle entry and build its runtime. */
-async function defaultCreateRuntime(entry, { adaptersDir, loadAdapterFn }) {
+async function defaultCreateRuntime(entry, { adaptersDir, loadAdapterFn, cwd, jjBase = null }) {
   const mod = await loadAdapterFn(entry.adapter, { adaptersDir });
   const factory = findFactory(mod, RUNTIME_FACTORY_RE);
   if (factory === null) {
     throw new Error(`adapter "${entry.adapter}" exports no runtime factory`);
   }
-  return factory({ agent: entry.agent });
+  const runtime = factory({ agent: entry.agent, baseBranch: jjBase ?? undefined });
+  return jjBase === null ? runtime : withWorkingCopySync(runtime, { cwd, bookmark: jjBase });
 }
 
 /** Load the VCS adapter named by the lifecycle block and build it. */
@@ -347,8 +384,15 @@ export async function run(argv = [], overrides = {}) {
 
     const stateDir = resolve(cwd, lifecycle.stateDir);
     const ref = currentBranch(cwd);
+    // A colocated Jujutsu workspace reports itself here, and an unresolvable
+    // one reports an error instead of passing as plain Git; either way the
+    // runtimes are built against the synced working-copy ref rather than the
+    // branch tip (the sync itself refuses a dispatch it cannot prove).
+    const jjWorkspace = jjWorkspaceRoot(cwd);
+    const jjBase = jjWorkspace.root === null && jjWorkspace.error === null ? null : JJ_WC_BOOKMARK;
     const context = {
       cwd,
+      jjBase,
       adaptersDir: resolve(overrides.adaptersDir ?? join(cwd, "scripts", "adapters")),
       loadAdapterFn: overrides.loadAdapter ?? loadAdapter,
       createRuntime: overrides.createRuntime ?? defaultCreateRuntime,

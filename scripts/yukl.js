@@ -3,12 +3,16 @@
 //
 //   yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]
 //   yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]
+//   yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]
 //   yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]
 //
 // The binding layer is deterministic checks, not prompts. `render` expands a
 // pipeline stage spec for any agent runtime (Claude Code, OpenCode, Antigravity,
 // Orca or none); `verify` enforces the Rational Persuasion contract and is
-// designed to be the merge gate a CI job runs on pull requests; `init`
+// designed to be the merge gate a CI job runs on pull requests; `vcs-sync`
+// publishes a colocated Jujutsu working copy into Git (`syncJjWorkingCopy`)
+// without rewriting `@`, before a Git-only dispatcher branches a worker from a
+// stale tip; `init`
 // installs the harness into a target repository on a feature branch without
 // overwriting anything the repository already has.
 //
@@ -1158,6 +1162,399 @@ export function jjWorkingCopyOnDefaultBranch(cwd, defaultBranch) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Jujutsu working-copy publication
+// ---------------------------------------------------------------------------
+
+/** The Git branch `yukl vcs-sync` publishes the Jujutsu working copy under. */
+export const JJ_WC_BOOKMARK = "yukl-wc";
+
+const JJ_BOOKMARK_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+/**
+ * True when `name` is shaped like a Git branch Jujutsu will accept as a
+ * bookmark name: a leading alphanumeric run, then alphanumerics and `._/-`,
+ * with no `..`, no trailing `/` and no `.lock` suffix. Purely syntactic; the
+ * real refusal is still jj's own. Kept here so the CLI can report a usage
+ * error (exit 2) before jj is spawned at all.
+ */
+export function isJjBookmarkName(name) {
+  return (
+    typeof name === "string" &&
+    JJ_BOOKMARK_RE.test(name) &&
+    !name.includes("..") &&
+    !name.endsWith("/") &&
+    !name.endsWith(".lock")
+  );
+}
+
+/**
+ * The nearest directory at or above `cwd` that holds a `.jj` entry (directory
+ * or file), walking up to the filesystem root, or null when there is none.
+ * `jj root` does this walk itself, but a workspace marker has to be found even
+ * when jj cannot answer (it is missing, or the workspace is unreadable), which
+ * is exactly when the harness must not mistake a workspace for plain Git.
+ */
+function jjDirAtOrAbove(cwd) {
+  let dir = resolve(cwd);
+  for (;;) {
+    if (existsSync(join(dir, ".jj"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Locate the Jujutsu workspace containing `cwd`. Returns `{ root, error }`.
+ * jj answers this itself: it is run *in* `cwd`, where `jj root` walks up the
+ * directory tree, so a subdirectory and the workspace root resolve alike (jj's
+ * `--repository` flag does not walk up, only an exact workspace root). A plain
+ * Git repository is `{ root: null, error: null }` rather than a throw: the
+ * harness has to run in Git repositories that know nothing about Jujutsu.
+ *
+ * The answer fails closed: a `.jj` at or above `cwd` (the walk stops at the
+ * filesystem root) means a workspace is unmistakably there, so jj failing - it
+ * cannot be run, or `jj root` exits non-zero - is an error naming the directory
+ * that holds `.jj` and jj's first stderr line. Passing an unreadable workspace
+ * off as "nothing to publish" would let a dispatcher branch a worker from a
+ * stale tip. Only a tree with no `.jj` anywhere stays `{ root: null, error:
+ * null }`.
+ *
+ * `jjSpawn` is the runner every jj command here goes through (node's
+ * `spawnSync` by default), so a test can make jj unable to answer.
+ */
+export function jjWorkspaceRoot(cwd, jjSpawn = spawnSync) {
+  const jjDir = jjDirAtOrAbove(cwd);
+  const result = jjSpawn("jj", ["root"], { cwd, encoding: "utf8" });
+  if (result.error) {
+    if (jjDir === null) return { root: null, error: null };
+    return {
+      root: null,
+      error: `.jj is present in ${jjDir} but jj could not be run: ${result.error.message}`,
+    };
+  }
+  if (result.status !== 0) {
+    if (jjDir === null) return { root: null, error: null };
+    return {
+      root: null,
+      error: `.jj is present in ${jjDir} but jj root failed: ${firstFailedLine(result)}`,
+    };
+  }
+  const root = (result.stdout || "").trim();
+  if (root !== "") return { root, error: null };
+  if (jjDir === null) return { root: null, error: null };
+  return { root: null, error: `.jj is present in ${jjDir} but jj root named no workspace` };
+}
+
+/** The commit id `revset` resolves to in the workspace at `root`, or null. */
+function jjCommitId(root, revset, jjSpawn = spawnSync) {
+  const result = jjSpawn(
+    "jj",
+    ["--repository", root, "log", "-r", revset, "--no-graph", "-T", "commit_id"],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) return null;
+  const id = (result.stdout || "").trim();
+  return /^[0-9a-f]{40}$/.test(id) ? id : null;
+}
+
+/**
+ * One `jj bookmark list` row, as a tab-separated line: the bookmark's name,
+ * whether the row is the local bookmark or a remote-tracking one, the single
+ * commit it names (`unset` when it names none), and the commits a conflict
+ * names instead. A bookmark name this module accepts holds no tab, so a row
+ * splits unambiguously.
+ */
+const JJ_BOOKMARK_ROW =
+  'name ++ "\t" ++ if(remote, "remote", "local") ++ "\t" ++ ' +
+  'if(conflict, "conflicted", if(present, normal_target.commit_id(), "unset")) ++ "\t" ++ ' +
+  'added_targets.map(|target| target.commit_id().short(12)).join(",") ++ "\n"';
+
+/**
+ * How the *local* bookmark `name` stands in the workspace at `root`, asked of
+ * jj in a way that cannot confuse "the bookmark is missing" with "jj could not
+ * answer": the query lists bookmarks matching that exact name (`exact:` is a
+ * jj string pattern), and only a successful query with no row for the name is
+ * `{ kind: "absent" }`. A conflict, a bookmark that names no commit, a row
+ * this sync cannot read, and a jj that fails outright are `conflicted` or
+ * `unreadable`, which the caller refuses before writing anything: reading a
+ * bookmark jj will not vouch for as "missing" is what let
+ * `jj bookmark set --allow-backwards` overwrite an unresolved conflict with
+ * `@`.
+ *
+ * Returns `{ kind: "absent" }`, `{ kind: "present", commit }`,
+ * `{ kind: "conflicted", targets }`, or `{ kind: "unreadable", detail }`,
+ * where `detail` carries jj's own first failed line when there is one.
+ */
+function jjBookmarkState(root, name, jjSpawn = spawnSync) {
+  const result = jjSpawn(
+    "jj",
+    ["--repository", root, "bookmark", "list", `exact:${name}`, "-T", JJ_BOOKMARK_ROW],
+    { encoding: "utf8" },
+  );
+  if (result.error) {
+    return { kind: "unreadable", detail: `jj could not be run: ${result.error.message}` };
+  }
+  if (result.status !== 0) return { kind: "unreadable", detail: firstFailedLine(result) };
+
+  const local = [];
+  for (const line of `${result.stdout || ""}`.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const row = line.split("\t");
+    if (row.length !== 4 || row[0] !== name || (row[1] !== "local" && row[1] !== "remote")) {
+      return {
+        kind: "unreadable",
+        detail: `jj printed a bookmark row this sync cannot read: ${line}`,
+      };
+    }
+    if (row[1] === "local") local.push(row);
+  }
+  if (local.length === 0) return { kind: "absent" };
+  if (local.length > 1) {
+    return {
+      kind: "unreadable",
+      detail: `jj named ${local.length} local bookmarks called ${name}`,
+    };
+  }
+
+  const [, , target, targets] = local[0];
+  if (target === "conflicted") {
+    return { kind: "conflicted", targets: targets === "" ? "several commits" : targets };
+  }
+  if (!/^[0-9a-f]{40}$/.test(target)) {
+    return { kind: "unreadable", detail: `jj named no single commit for ${name} (${target})` };
+  }
+  return { kind: "present", commit: target };
+}
+
+/**
+ * Whether the local bookmark `name` at `root` tracks a remote bookmark, so the
+ * user published it elsewhere: moving it backwards would rewrite a ref other
+ * people already see. `exact:` keeps the match to that one name. The answer
+ * fails closed: `{ error }` when jj cannot be run or exits non-zero, which the
+ * caller refuses, rather than "no remote" - a jj that cannot answer is not a
+ * bookmark with no remote.
+ */
+function jjBookmarkTracksRemote(root, name, jjSpawn = spawnSync) {
+  const result = jjSpawn(
+    "jj",
+    [
+      "--repository",
+      root,
+      "log",
+      "-r",
+      `tracked_remote_bookmarks(exact:"${name}")`,
+      "--no-graph",
+      "-T",
+      "commit_id",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.error) return { tracks: false, error: `jj could not be run: ${result.error.message}` };
+  if (result.status !== 0) return { tracks: false, error: firstFailedLine(result) };
+  return { tracks: (result.stdout || "").trim() !== "", error: null };
+}
+
+/** The first non-empty line of `text`, trimmed, or "" when there is none. */
+function firstLine(text) {
+  const line = `${text || ""}`.split(/\r?\n/).find((entry) => entry.trim() !== "");
+  return line === undefined ? "" : line.trim();
+}
+
+/** The last non-empty line of a failed command's output, for a one-line error. */
+function failedLine(result) {
+  const lines = `${result.stderr || ""}${result.stdout || ""}`
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "");
+  return lines.length === 0 ? `exit ${result.status}` : lines[lines.length - 1];
+}
+
+/** jj's first stderr line (then stdout's), for the one-line error of a refusal. */
+function firstFailedLine(result) {
+  const line = firstLine(result.stderr) || firstLine(result.stdout);
+  return line === "" ? `exit ${result.status}` : line;
+}
+
+/**
+ * Publish the Jujutsu working-copy commit (`@`) as the Git ref
+ * `refs/heads/<bookmark>`, and prove the ref really names it.
+ *
+ * Jujutsu snapshots the working copy into `@` on every command, so `@` always
+ * holds the uncommitted state - but in a colocated workspace that commit is
+ * reachable only through Jujutsu's own bookmark machinery, and a Git-only
+ * consumer (Orca branching a worker's worktree from a branch tip) never sees
+ * it. This function closes that gap: move the bookmark onto `@`
+ * (`--allow-backwards`, so the ref tracks `@` in both directions), let Jujutsu
+ * export bookmarks into Git, and then check with Git itself that the ref
+ * resolves to exactly the `@` commit id. Only that last check makes a sync
+ * successful.
+ *
+ * The sync publishes a ref and never rewrites `@`. `@` may carry no
+ * description at all, and that emptiness is the author's: Jujutsu's own
+ * `jj git push` refuses a commit with no description, so describing `@` here
+ * would silently lift the guard standing between work in progress and a
+ * published branch. An undescribed `@` is published as-is (Git accepts an
+ * empty commit message), and a description that is already there is left
+ * byte-for-byte alone.
+ *
+ * A bookmark this function may move is one yukl owns, so a bookmark the user
+ * owns is refused before anything is written (the bookmark stays where it is):
+ *
+ * - the default working-copy bookmark `yukl-wc` is yukl's own namespace, and it
+ *   is movable whether Git already names it - the previous published `@` - or
+ *   has no ref of that name yet; or
+ * - any other bookmark that already points at `@`, in which case moving it is a
+ *   no-op that only republishes the state Git is missing ("already published").
+ *
+ * Existence itself is decided by a read that tells three outcomes apart: a
+ * bookmark jj says is missing is a first publication, a bookmark jj describes
+ * as conflicted is refused (with the commits it names instead of one), and a
+ * bookmark jj cannot describe at all - an error, or a row this sync cannot
+ * read - is refused too. A jj that cannot answer is never "missing": that
+ * reading is what let `--allow-backwards` overwrite an unresolved conflict
+ * with `@`. For the same reason the remote-tracking question fails closed.
+ *
+ * Everything else - `main` behind `@`, say - is a branch the user owns: it is
+ * refused when it tracks a remote (moving it would rewrite what others see) and
+ * refused when it does not already point at `@`, because `--allow-backwards`
+ * would then drag a real branch onto the working copy.
+ *
+ * `jjSpawn` is the runner every jj command of the sync goes through (node's
+ * `spawnSync` by default), injectable so a test can make jj unable to answer.
+ *
+ * Returns `{ ok: true, synced: false, reason }` when `cwd` holds no Jujutsu
+ * workspace (nothing to publish, and not an error), `{ ok: false, error }`
+ * when a workspace exists but cannot be published, or
+ * `{ ok: true, synced: true, jjRoot, bookmark, ref, commit, moved }`.
+ * Files Jujutsu ignores are not part of the snapshot, exactly as they are not
+ * part of the working copy it tracks.
+ */
+export function syncJjWorkingCopy({
+  cwd = process.cwd(),
+  bookmark = JJ_WC_BOOKMARK,
+  jjSpawn = spawnSync,
+} = {}) {
+  if (!isJjBookmarkName(bookmark)) {
+    return { ok: false, error: `"${bookmark}" is not a valid Jujutsu bookmark name` };
+  }
+  const { root, error: locateError } = jjWorkspaceRoot(cwd, jjSpawn);
+  if (locateError !== null) return { ok: false, error: locateError };
+  if (root === null) {
+    return { ok: true, synced: false, reason: "no Jujutsu workspace" };
+  }
+  const vcsError = vcsViolation(root);
+  if (vcsError !== null) return { ok: false, error: vcsError };
+
+  // Read the published ref before jj runs at all: jj snapshots the working copy
+  // into the commit inside its own commands, so a later read would already
+  // report the state this sync produces and could never see a move.
+  const ref = `refs/heads/${bookmark}`;
+  const before = git(["rev-parse", "--verify", "--quiet", ref], root);
+  const wasAt = before.status === 0 ? (before.stdout || "").trim() : null;
+
+  // A bookmark someone else owns is refused before every write, and only the
+  // state jj vouches for as missing may be created here.
+  const state = jjBookmarkState(root, bookmark, jjSpawn);
+  if (state.kind === "conflicted") {
+    return {
+      ok: false,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: it is ` +
+        `conflicted (jj names ${state.targets}); resolve it before publishing`,
+    };
+  }
+  if (state.kind === "unreadable") {
+    return {
+      ok: false,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: jj could not say ` +
+        `which commit it names: ${state.detail}`,
+    };
+  }
+  const existing = state.kind === "present" ? state.commit : null;
+
+  // A remote-tracking bookmark is refused outright, because moving it would
+  // rewrite a ref other people already see - and a jj that cannot answer the
+  // question is refused as well, since assuming "no remote" is how a published
+  // ref gets rewritten. A bookmark that does not exist locally owns nothing
+  // yet: any remote bookmark of that name stays untracked and unpushed.
+  if (existing !== null) {
+    const tracking = jjBookmarkTracksRemote(root, bookmark, jjSpawn);
+    if (tracking.error !== null) {
+      return {
+        ok: false,
+        error:
+          `refusing to move the existing bookmark ${bookmark} in ${root}: jj could not say ` +
+          `whether it tracks a remote: ${tracking.error}`,
+      };
+    }
+    if (tracking.tracks) {
+      return {
+        ok: false,
+        error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
+      };
+    }
+  }
+
+  // The working copy is read once and never rewritten: the sync publishes a
+  // ref, so `@` is exactly the commit that gets published, whatever - or
+  // nothing - its description holds.
+  const commit = jjCommitId(root, "@", jjSpawn);
+  if (commit === null) {
+    return { ok: false, error: `cannot resolve the Jujutsu working copy (@) in ${root}` };
+  }
+
+  // `yukl-wc` is yukl's own namespace - Git naming it is the previous published
+  // `@`, and Git naming nothing yet is a first publication - so it is always
+  // movable. Another bookmark may only be moved when it would not move at all:
+  // it already points at `@`, and the sync merely republishes what Git misses.
+  if (existing !== null && bookmark !== JJ_WC_BOOKMARK && existing !== commit) {
+    return {
+      ok: false,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: it is not the yukl ` +
+        `working-copy bookmark ${JJ_WC_BOOKMARK} and does not already point at the working ` +
+        `copy (@) ${commit.slice(0, 12)}`,
+    };
+  }
+
+  const set = jjSpawn(
+    "jj",
+    ["--repository", root, "bookmark", "set", "--allow-backwards", bookmark, "-r", "@"],
+    { encoding: "utf8" },
+  );
+  if (set.status !== 0) {
+    return { ok: false, error: `jj bookmark set ${bookmark} failed: ${failedLine(set)}` };
+  }
+  const exported = jjSpawn("jj", ["--repository", root, "git", "export"], { encoding: "utf8" });
+  if (exported.status !== 0) {
+    return { ok: false, error: `jj git export failed: ${failedLine(exported)}` };
+  }
+
+  // Proof, not faith: Git must resolve the ref to the working-copy commit.
+  const published = git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], root);
+  const at = published.status === 0 ? (published.stdout || "").trim() : "";
+  if (at !== commit) {
+    const found = at === "" ? "nothing" : at.slice(0, 12);
+    return {
+      ok: false,
+      error:
+        `${ref} resolves to ${found} but the Jujutsu working copy is ${commit.slice(0, 12)}: ` +
+        "the working copy was not published",
+    };
+  }
+  return {
+    ok: true,
+    synced: true,
+    jjRoot: root,
+    bookmark,
+    ref,
+    commit,
+    moved: wasAt !== commit,
+  };
+}
+
 /**
  * Resolve the pinned yukl commit the generated CI workflow must run.
  * A CI gate that runs a floating ref can be made to run anything by anyone
@@ -1555,6 +1952,7 @@ const USAGE = [
   "usage:",
   "  yukl render <stage-id> [--config <path>] [--task-id <id>] [--cwd <dir>]",
   "  yukl verify [<contract-path>...] [--base <git-ref>] [--timeout-ms <ms>] [--cwd <dir>]",
+  "  yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]",
   "  yukl init [--cwd <dir>] [--force] [--yukl-pin <commit-sha>]",
   "            [--project-dir <rel>]... [--command <key>=<cmd>]...",
 ].join("\n");
