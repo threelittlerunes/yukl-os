@@ -103,6 +103,67 @@ function colocatedRepo(dir) {
   assert.equal(init.status, 0, init.stderr);
 }
 
+/**
+ * The commit ids jj names for the *local* bookmark `name`: the one id of an
+ * ordinary bookmark, or both sides of a conflict.
+ */
+function localBookmarkTargets(workspace, name) {
+  const template =
+    'if(remote, "remote\\t", "local\\t") ++ ' +
+    'if(conflict, added_targets.map(|target| target.commit_id()).join(","), ' +
+    'normal_target.commit_id()) ++ "\\n"';
+  return jjOut(workspace, ["bookmark", "list", `exact:${name}`, "-T", template])
+    .split("\n")
+    .filter((row) => row.startsWith("local\t"))
+    .map((row) => row.slice("local\t".length))
+    .join(" ");
+}
+
+/** The commit `refs/heads/<name>` names in `workspace`, or null when absent. */
+function refAt(workspace, name) {
+  const result = spawnSync(
+    "git",
+    [...GIT_IDENTITY, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
+    { cwd: workspace, encoding: "utf8" },
+  );
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+/**
+ * A colocated workspace whose local bookmarks `names` are conflicted, built
+ * only through jj and Git: each bookmark is moved locally onto a commit of its
+ * own while a bare Git remote moves the same bookmark onto a different commit,
+ * so `jj git fetch` can fast-forward neither way and jj reports a conflict.
+ */
+function conflictedWorkspace(dir, names) {
+  const remote = join(dir, "remote.git");
+  git(["init", "-q", "--bare", remote], dir);
+  const workspace = join(dir, "ws");
+  colocatedRepo(workspace);
+  writeFileSync(join(workspace, "README.md"), "base\n");
+  jj(workspace, ["describe", "-m", "base"]);
+  const base = jjOut(workspace, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+  for (const name of names) jj(workspace, ["bookmark", "create", name, "-r", "@"]);
+  jj(workspace, ["git", "remote", "add", "origin", remote]);
+  for (const name of names) jj(workspace, ["git", "push", "--bookmark", name]);
+
+  // The user moves every bookmark onto a commit of their own ...
+  jj(workspace, ["new", base]);
+  jj(workspace, ["describe", "-m", "local"]);
+  for (const name of names) jj(workspace, ["bookmark", "set", name, "-r", "@"]);
+
+  // ... while the remote moves the same bookmark onto another commit.
+  const clone = join(dir, "clone");
+  git(["clone", "-q", remote, clone], dir);
+  for (const name of names) {
+    git(["checkout", "-q", "-B", name, `origin/${name}`], clone);
+    git(["commit", "-q", "--allow-empty", "-m", `${name} moved on the remote`], clone);
+    git(["push", "-q", "origin", name], clone);
+  }
+  jj(workspace, ["git", "fetch"]);
+  return workspace;
+}
+
 /** A runtime whose four entry points are all observable, plus the dispatch log. */
 function fakeRuntime() {
   const starts = [];
@@ -684,6 +745,244 @@ test(
         "the bookmark is untouched",
       );
       assert.equal(gitOut(["rev-parse", "refs/heads/shared"], workspace), before);
+    });
+  },
+);
+
+test(
+  "syncJjWorkingCopy refuses a conflicted bookmark and leaves the conflict intact",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      const workspace = conflictedWorkspace(dir, [JJ_WC_BOOKMARK, "shared"]);
+      for (const name of [JJ_WC_BOOKMARK, "shared"]) {
+        const targets = localBookmarkTargets(workspace, name);
+        assert.match(
+          targets,
+          /^[0-9a-f]{40},[0-9a-f]{40}$/,
+          `${name} is conflicted between two commits`,
+        );
+        const refBefore = refAt(workspace, name);
+
+        const refused = syncJjWorkingCopy({ cwd: workspace, bookmark: name });
+        assert.equal(refused.ok, false, `${name}: an unresolved conflict is never overwritten`);
+        assert.match(refused.error, new RegExp(`refusing to move the existing bookmark ${name}`));
+        assert.match(refused.error, /it is conflicted/);
+        assert.match(refused.error, /resolve it before publishing/);
+        assert.ok(
+          !/it tracks a remote/.test(refused.error),
+          `${name}: the conflict is the reason named, not the remote it also tracks`,
+        );
+
+        // The bookmark is exactly where the user left it: jj still reports the
+        // same two candidates, still refuses to resolve the name, and neither
+        // the Git ref nor the working copy was written.
+        assert.equal(localBookmarkTargets(workspace, name), targets, `${name} stays conflicted`);
+        assert.equal(refAt(workspace, name), refBefore, `${name}'s Git ref is untouched`);
+        const conflicted = spawnSync(
+          "jj",
+          [
+            ...JJ_IDENTITY,
+            "--repository",
+            workspace,
+            "log",
+            "-r",
+            name,
+            "--no-graph",
+            "-T",
+            "commit_id",
+          ],
+          { encoding: "utf8" },
+        );
+        assert.notEqual(conflicted.status, 0, "jj still refuses to resolve the conflicted name");
+        assert.match(conflicted.stderr, /is conflicted/);
+      }
+
+      // The command refuses before any write instead of publishing @ over it.
+      const cli = runCli(["vcs-sync", "--cwd", workspace, "--bookmark", "shared"]);
+      assert.equal(cli.status, 1, cli.stdout);
+      assert.match(cli.stderr, /refusing to move the existing bookmark shared/);
+      assert.match(cli.stderr, /it is conflicted/);
+      assert.match(cli.stderr, /resolve it before publishing/);
+
+      // Resolving the conflict is the user's act, and the guard does not go
+      // away with it: the bookmark then still tracks a remote, so the sync
+      // refuses it for that reason instead.
+      jj(workspace, ["bookmark", "set", "shared", "-r", "@"]);
+      assert.match(localBookmarkTargets(workspace, "shared"), /^[0-9a-f]{40}$/, "resolved by hand");
+      const stillGuarded = syncJjWorkingCopy({ cwd: workspace, bookmark: "shared" });
+      assert.equal(stillGuarded.ok, false);
+      assert.match(stillGuarded.error, /it tracks a remote/);
+    });
+  },
+);
+
+test(
+  "syncJjWorkingCopy publishes a custom bookmark that does not exist yet",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      colocatedRepo(dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      jj(dir, ["describe", "-m", "base"]);
+      // A bookmark whose name starts with the new one: existence is decided by
+      // the exact name, never by a prefix or pattern match.
+      jj(dir, ["bookmark", "create", "freshness", "-r", "@"]);
+      const neighbour = jjOut(dir, ["log", "-r", "freshness", "--no-graph", "-T", "commit_id"]);
+      jj(dir, ["new"]);
+      jj(dir, ["describe", "-m", ""]);
+      const commit = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+      assert.notEqual(commit, neighbour, "the neighbour names another commit");
+
+      const result = syncJjWorkingCopy({ cwd: dir, bookmark: "fresh" });
+      assert.equal(result.ok, true, result.error);
+      assert.equal(result.synced, true);
+      assert.equal(result.moved, true, "the bookmark is created by this run");
+      assert.equal(result.bookmark, "fresh");
+      assert.equal(result.ref, "refs/heads/fresh");
+      assert.equal(result.commit, commit);
+
+      assert.equal(gitOut(["rev-parse", "refs/heads/fresh"], dir), commit, "Git names @");
+      assert.equal(
+        jjOut(dir, ["log", "-r", "fresh", "--no-graph", "-T", "commit_id"]),
+        commit,
+        "jj names @",
+      );
+      assert.equal(
+        jjOut(dir, ["log", "-r", "freshness", "--no-graph", "-T", "commit_id"]),
+        neighbour,
+        "the bookmark with the longer name is untouched",
+      );
+      assert.equal(
+        jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "description"]),
+        "",
+        "the working copy is still undescribed",
+      );
+
+      // Running it again finds the bookmark it just published, pointing at @.
+      const second = syncJjWorkingCopy({ cwd: dir, bookmark: "fresh" });
+      assert.equal(second.ok, true, second.error);
+      assert.equal(second.moved, false);
+      assert.equal(second.commit, commit);
+    });
+  },
+);
+
+test(
+  "syncJjWorkingCopy refuses the default bookmark when it tracks a remote",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      const remote = join(dir, "remote.git");
+      git(["init", "-q", "--bare", remote], dir);
+      const workspace = join(dir, "ws");
+      colocatedRepo(workspace);
+      writeFileSync(join(workspace, "README.md"), "base\n");
+      jj(workspace, ["describe", "-m", "base"]);
+      jj(workspace, ["bookmark", "create", JJ_WC_BOOKMARK, "-r", "@"]);
+      jj(workspace, ["git", "remote", "add", "origin", remote]);
+      jj(workspace, ["git", "push", "--bookmark", JJ_WC_BOOKMARK]);
+      jj(workspace, ["git", "fetch"]);
+      assert.notEqual(
+        jjOut(workspace, [
+          "log",
+          "-r",
+          `tracked_remote_bookmarks(exact:"${JJ_WC_BOOKMARK}")`,
+          "--no-graph",
+          "-T",
+          "commit_id",
+        ]),
+        "",
+        "the fixture tracks origin/yukl-wc",
+      );
+
+      jj(workspace, ["new"]);
+      jj(workspace, ["describe", "-m", ""]);
+      const before = jjOut(workspace, [
+        "log",
+        "-r",
+        JJ_WC_BOOKMARK,
+        "--no-graph",
+        "-T",
+        "commit_id",
+      ]);
+      const refBefore = refAt(workspace, JJ_WC_BOOKMARK);
+
+      // yukl's own namespace is movable, but not when the user published it:
+      // moving it would rewrite a ref other people already see.
+      const refused = syncJjWorkingCopy({ cwd: workspace });
+      assert.equal(refused.ok, false);
+      assert.match(refused.error, /refusing to move the existing bookmark yukl-wc/);
+      assert.match(refused.error, /it tracks a remote/);
+      assert.equal(
+        jjOut(workspace, ["log", "-r", JJ_WC_BOOKMARK, "--no-graph", "-T", "commit_id"]),
+        before,
+        "the published bookmark is untouched",
+      );
+      assert.equal(refAt(workspace, JJ_WC_BOOKMARK), refBefore, "its Git ref is untouched too");
+
+      const cli = runCli(["vcs-sync", "--cwd", workspace]);
+      assert.equal(cli.status, 1, cli.stdout);
+      assert.match(cli.stderr, /it tracks a remote/);
+    });
+  },
+);
+
+test(
+  "syncJjWorkingCopy refuses when jj cannot answer the ownership questions",
+  { skip: JJ_SKIP },
+  async () => {
+    await withTempDir(async (dir) => {
+      colocatedRepo(dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      jj(dir, ["describe", "-m", "base"]);
+      jj(dir, ["bookmark", "create", JJ_WC_BOOKMARK, "-r", "@"]);
+      const published = jjOut(dir, ["log", "-r", JJ_WC_BOOKMARK, "--no-graph", "-T", "commit_id"]);
+      // The working copy moves on, so a sync that runs would move the bookmark
+      // and its Git ref onto @: every refusal below must leave both behind.
+      jj(dir, ["new"]);
+      jj(dir, ["describe", "-m", ""]);
+      const workingCopy = jjOut(dir, ["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+      assert.notEqual(workingCopy, published, "@ is ahead of the bookmark");
+
+      /** Real jj, except for the calls `broken` matches: those fail like a jj
+       * that cannot answer, which must never read as "no bookmark, no remote". */
+      const jjExcept = (broken) => (command, args, options) =>
+        command === "jj" && broken.some((arg) => args.includes(arg))
+          ? { status: 1, stdout: "", stderr: "simulated: jj could not answer\n" }
+          : spawnSync(command, args, options);
+
+      const unreadable = syncJjWorkingCopy({
+        cwd: dir,
+        jjSpawn: jjExcept(["bookmark"]),
+      });
+      assert.equal(unreadable.ok, false, "a jj that cannot read the bookmark is not 'missing'");
+      assert.match(unreadable.error, /refusing to move the existing bookmark yukl-wc/);
+      assert.match(unreadable.error, /jj could not say which commit it names/);
+      assert.match(unreadable.error, /simulated: jj could not answer/);
+
+      const untracked = syncJjWorkingCopy({
+        cwd: dir,
+        jjSpawn: jjExcept([`tracked_remote_bookmarks(exact:"${JJ_WC_BOOKMARK}")`]),
+      });
+      assert.equal(untracked.ok, false, "a jj that cannot answer is not 'no remote'");
+      assert.match(untracked.error, /refusing to move the existing bookmark yukl-wc/);
+      assert.match(untracked.error, /jj could not say whether it tracks a remote/);
+      assert.match(untracked.error, /simulated: jj could not answer/);
+
+      // Neither refusal wrote anything.
+      assert.equal(refAt(dir, JJ_WC_BOOKMARK), published, "the Git ref is still behind @");
+      assert.equal(
+        jjOut(dir, ["log", "-r", JJ_WC_BOOKMARK, "--no-graph", "-T", "commit_id"]),
+        published,
+        "the bookmark is still behind @",
+      );
+
+      // With jj able to answer, the same call publishes and proves itself.
+      const synced = syncJjWorkingCopy({ cwd: dir });
+      assert.equal(synced.ok, true, synced.error);
+      assert.equal(synced.commit, workingCopy);
+      assert.equal(refAt(dir, JJ_WC_BOOKMARK), workingCopy, "Git now names @");
     });
   },
 );

@@ -1220,10 +1220,13 @@ function jjDirAtOrAbove(cwd) {
  * off as "nothing to publish" would let a dispatcher branch a worker from a
  * stale tip. Only a tree with no `.jj` anywhere stays `{ root: null, error:
  * null }`.
+ *
+ * `jjSpawn` is the runner every jj command here goes through (node's
+ * `spawnSync` by default), so a test can make jj unable to answer.
  */
-export function jjWorkspaceRoot(cwd) {
+export function jjWorkspaceRoot(cwd, jjSpawn = spawnSync) {
   const jjDir = jjDirAtOrAbove(cwd);
-  const result = spawnSync("jj", ["root"], { cwd, encoding: "utf8" });
+  const result = jjSpawn("jj", ["root"], { cwd, encoding: "utf8" });
   if (result.error) {
     if (jjDir === null) return { root: null, error: null };
     return {
@@ -1245,8 +1248,8 @@ export function jjWorkspaceRoot(cwd) {
 }
 
 /** The commit id `revset` resolves to in the workspace at `root`, or null. */
-function jjCommitId(root, revset) {
-  const result = spawnSync(
+function jjCommitId(root, revset, jjSpawn = spawnSync) {
+  const result = jjSpawn(
     "jj",
     ["--repository", root, "log", "-r", revset, "--no-graph", "-T", "commit_id"],
     { encoding: "utf8" },
@@ -1257,14 +1260,84 @@ function jjCommitId(root, revset) {
 }
 
 /**
- * True when the local bookmark `name` at `root` tracks a remote bookmark, so
- * the user published it elsewhere: moving it backwards would rewrite a ref
- * other people already see. `exact:` keeps the match to that one name. A jj
- * that cannot answer (the revset is unsupported) is reported as "no remote":
- * the ownership check in syncJjWorkingCopy still guards what it may move.
+ * One `jj bookmark list` row, as a tab-separated line: the bookmark's name,
+ * whether the row is the local bookmark or a remote-tracking one, the single
+ * commit it names (`unset` when it names none), and the commits a conflict
+ * names instead. A bookmark name this module accepts holds no tab, so a row
+ * splits unambiguously.
  */
-function jjBookmarkTracksRemote(root, name) {
-  const result = spawnSync(
+const JJ_BOOKMARK_ROW =
+  'name ++ "\t" ++ if(remote, "remote", "local") ++ "\t" ++ ' +
+  'if(conflict, "conflicted", if(present, normal_target.commit_id(), "unset")) ++ "\t" ++ ' +
+  'added_targets.map(|target| target.commit_id().short(12)).join(",") ++ "\n"';
+
+/**
+ * How the *local* bookmark `name` stands in the workspace at `root`, asked of
+ * jj in a way that cannot confuse "the bookmark is missing" with "jj could not
+ * answer": the query lists bookmarks matching that exact name (`exact:` is a
+ * jj string pattern), and only a successful query with no row for the name is
+ * `{ kind: "absent" }`. A conflict, a bookmark that names no commit, a row
+ * this sync cannot read, and a jj that fails outright are `conflicted` or
+ * `unreadable`, which the caller refuses before writing anything: reading a
+ * bookmark jj will not vouch for as "missing" is what let
+ * `jj bookmark set --allow-backwards` overwrite an unresolved conflict with
+ * `@`.
+ *
+ * Returns `{ kind: "absent" }`, `{ kind: "present", commit }`,
+ * `{ kind: "conflicted", targets }`, or `{ kind: "unreadable", detail }`,
+ * where `detail` carries jj's own first failed line when there is one.
+ */
+function jjBookmarkState(root, name, jjSpawn = spawnSync) {
+  const result = jjSpawn(
+    "jj",
+    ["--repository", root, "bookmark", "list", `exact:${name}`, "-T", JJ_BOOKMARK_ROW],
+    { encoding: "utf8" },
+  );
+  if (result.error) {
+    return { kind: "unreadable", detail: `jj could not be run: ${result.error.message}` };
+  }
+  if (result.status !== 0) return { kind: "unreadable", detail: firstFailedLine(result) };
+
+  const local = [];
+  for (const line of `${result.stdout || ""}`.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const row = line.split("\t");
+    if (row.length !== 4 || row[0] !== name || (row[1] !== "local" && row[1] !== "remote")) {
+      return {
+        kind: "unreadable",
+        detail: `jj printed a bookmark row this sync cannot read: ${line}`,
+      };
+    }
+    if (row[1] === "local") local.push(row);
+  }
+  if (local.length === 0) return { kind: "absent" };
+  if (local.length > 1) {
+    return {
+      kind: "unreadable",
+      detail: `jj named ${local.length} local bookmarks called ${name}`,
+    };
+  }
+
+  const [, , target, targets] = local[0];
+  if (target === "conflicted") {
+    return { kind: "conflicted", targets: targets === "" ? "several commits" : targets };
+  }
+  if (!/^[0-9a-f]{40}$/.test(target)) {
+    return { kind: "unreadable", detail: `jj named no single commit for ${name} (${target})` };
+  }
+  return { kind: "present", commit: target };
+}
+
+/**
+ * Whether the local bookmark `name` at `root` tracks a remote bookmark, so the
+ * user published it elsewhere: moving it backwards would rewrite a ref other
+ * people already see. `exact:` keeps the match to that one name. The answer
+ * fails closed: `{ error }` when jj cannot be run or exits non-zero, which the
+ * caller refuses, rather than "no remote" - a jj that cannot answer is not a
+ * bookmark with no remote.
+ */
+function jjBookmarkTracksRemote(root, name, jjSpawn = spawnSync) {
+  const result = jjSpawn(
     "jj",
     [
       "--repository",
@@ -1278,7 +1351,9 @@ function jjBookmarkTracksRemote(root, name) {
     ],
     { encoding: "utf8" },
   );
-  return result.status === 0 && (result.stdout || "").trim() !== "";
+  if (result.error) return { tracks: false, error: `jj could not be run: ${result.error.message}` };
+  if (result.status !== 0) return { tracks: false, error: firstFailedLine(result) };
+  return { tracks: (result.stdout || "").trim() !== "", error: null };
 }
 
 /** The first non-empty line of `text`, trimmed, or "" when there is none. */
@@ -1332,10 +1407,21 @@ function firstFailedLine(result) {
  * - any other bookmark that already points at `@`, in which case moving it is a
  *   no-op that only republishes the state Git is missing ("already published").
  *
+ * Existence itself is decided by a read that tells three outcomes apart: a
+ * bookmark jj says is missing is a first publication, a bookmark jj describes
+ * as conflicted is refused (with the commits it names instead of one), and a
+ * bookmark jj cannot describe at all - an error, or a row this sync cannot
+ * read - is refused too. A jj that cannot answer is never "missing": that
+ * reading is what let `--allow-backwards` overwrite an unresolved conflict
+ * with `@`. For the same reason the remote-tracking question fails closed.
+ *
  * Everything else - `main` behind `@`, say - is a branch the user owns: it is
  * refused when it tracks a remote (moving it would rewrite what others see) and
  * refused when it does not already point at `@`, because `--allow-backwards`
  * would then drag a real branch onto the working copy.
+ *
+ * `jjSpawn` is the runner every jj command of the sync goes through (node's
+ * `spawnSync` by default), injectable so a test can make jj unable to answer.
  *
  * Returns `{ ok: true, synced: false, reason }` when `cwd` holds no Jujutsu
  * workspace (nothing to publish, and not an error), `{ ok: false, error }`
@@ -1344,11 +1430,15 @@ function firstFailedLine(result) {
  * Files Jujutsu ignores are not part of the snapshot, exactly as they are not
  * part of the working copy it tracks.
  */
-export function syncJjWorkingCopy({ cwd = process.cwd(), bookmark = JJ_WC_BOOKMARK } = {}) {
+export function syncJjWorkingCopy({
+  cwd = process.cwd(),
+  bookmark = JJ_WC_BOOKMARK,
+  jjSpawn = spawnSync,
+} = {}) {
   if (!isJjBookmarkName(bookmark)) {
     return { ok: false, error: `"${bookmark}" is not a valid Jujutsu bookmark name` };
   }
-  const { root, error: locateError } = jjWorkspaceRoot(cwd);
+  const { root, error: locateError } = jjWorkspaceRoot(cwd, jjSpawn);
   if (locateError !== null) return { ok: false, error: locateError };
   if (root === null) {
     return { ok: true, synced: false, reason: "no Jujutsu workspace" };
@@ -1363,21 +1453,54 @@ export function syncJjWorkingCopy({ cwd = process.cwd(), bookmark = JJ_WC_BOOKMA
   const before = git(["rev-parse", "--verify", "--quiet", ref], root);
   const wasAt = before.status === 0 ? (before.stdout || "").trim() : null;
 
-  // A bookmark someone else owns is refused before every write: a
-  // remote-tracking bookmark is refused outright, because moving it would
-  // rewrite a ref other people already see.
-  const existing = jjCommitId(root, bookmark);
-  if (existing !== null && jjBookmarkTracksRemote(root, bookmark)) {
+  // A bookmark someone else owns is refused before every write, and only the
+  // state jj vouches for as missing may be created here.
+  const state = jjBookmarkState(root, bookmark, jjSpawn);
+  if (state.kind === "conflicted") {
     return {
       ok: false,
-      error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: it is ` +
+        `conflicted (jj names ${state.targets}); resolve it before publishing`,
     };
+  }
+  if (state.kind === "unreadable") {
+    return {
+      ok: false,
+      error:
+        `refusing to move the existing bookmark ${bookmark} in ${root}: jj could not say ` +
+        `which commit it names: ${state.detail}`,
+    };
+  }
+  const existing = state.kind === "present" ? state.commit : null;
+
+  // A remote-tracking bookmark is refused outright, because moving it would
+  // rewrite a ref other people already see - and a jj that cannot answer the
+  // question is refused as well, since assuming "no remote" is how a published
+  // ref gets rewritten. A bookmark that does not exist locally owns nothing
+  // yet: any remote bookmark of that name stays untracked and unpushed.
+  if (existing !== null) {
+    const tracking = jjBookmarkTracksRemote(root, bookmark, jjSpawn);
+    if (tracking.error !== null) {
+      return {
+        ok: false,
+        error:
+          `refusing to move the existing bookmark ${bookmark} in ${root}: jj could not say ` +
+          `whether it tracks a remote: ${tracking.error}`,
+      };
+    }
+    if (tracking.tracks) {
+      return {
+        ok: false,
+        error: `refusing to move the existing bookmark ${bookmark} in ${root}: it tracks a remote`,
+      };
+    }
   }
 
   // The working copy is read once and never rewritten: the sync publishes a
   // ref, so `@` is exactly the commit that gets published, whatever - or
   // nothing - its description holds.
-  const commit = jjCommitId(root, "@");
+  const commit = jjCommitId(root, "@", jjSpawn);
   if (commit === null) {
     return { ok: false, error: `cannot resolve the Jujutsu working copy (@) in ${root}` };
   }
@@ -1396,7 +1519,7 @@ export function syncJjWorkingCopy({ cwd = process.cwd(), bookmark = JJ_WC_BOOKMA
     };
   }
 
-  const set = spawnSync(
+  const set = jjSpawn(
     "jj",
     ["--repository", root, "bookmark", "set", "--allow-backwards", bookmark, "-r", "@"],
     { encoding: "utf8" },
@@ -1404,7 +1527,7 @@ export function syncJjWorkingCopy({ cwd = process.cwd(), bookmark = JJ_WC_BOOKMA
   if (set.status !== 0) {
     return { ok: false, error: `jj bookmark set ${bookmark} failed: ${failedLine(set)}` };
   }
-  const exported = spawnSync("jj", ["--repository", root, "git", "export"], { encoding: "utf8" });
+  const exported = jjSpawn("jj", ["--repository", root, "git", "export"], { encoding: "utf8" });
   if (exported.status !== 0) {
     return { ok: false, error: `jj git export failed: ${failedLine(exported)}` };
   }
