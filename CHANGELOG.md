@@ -7,6 +7,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `yukl run <task_id> --unattended` keeps driving one task until it is terminal,
+  needs a human, escalates or breaches a run limit, waiting for a running stage
+  instead of stopping at the 64-step cap; an attended run keeps the step-capped
+  loop it has always had. The two run limits in `yukl.policy.json` are now
+  enforced: an elapsed `maxWallMinutesPerRun` stops the run before the next
+  step, an exhausted `maxAgentStartsPerRun` refuses the agent start that would
+  exceed it (so a run at its limit still waits for the agent it dispatched),
+  and either breach appends an `enforcement` event carrying `R-RUN-LIMIT` and
+  the breached limit to the task's log before the run exits 1 (v3-unattended).
+- `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended:
+  each runs `yukl run --unattended` in its own Git worktree under
+  `.orchestration/worktrees/<task_id>`, tasks whose intents' `allowed_paths`
+  cannot overlap share a wave and run in parallel, overlapping tasks are
+  serialised into later waves, and a task whose intent cannot be read is
+  treated as an unknown scope that overlaps everything (v3-unattended).
+- `yukl lock <hold|status|release> <name> [--task <id>] [-- <command>]` and the
+  advisory lock broker behind it (`scripts/lifecycle/locks.js`): a lock is one
+  file at `.orchestration/locks/<name>.lock`, created exclusively so the create
+  is the mutual exclusion, recording `{ name, pid, host, task, at }`; `hold`
+  releases it however the command ends, and a lock whose recorded process is
+  gone is reclaimed by the next acquirer while an unparseable lock is refused
+  rather than reclaimed (v3-unattended).
+
+### Changed
+- Removed `maxTokensPerRun` everywhere (policy, validator, `run.js`, tests,
+  docs): no adapter can measure tokens, so it must not exist as a setting and
+  the policy schema now refuses any `budgets` key that is not a run limit. The
+  committed `yukl.policy.json` ships the two run limits switched on:
+  `maxWallMinutesPerRun: 120` and `maxAgentStartsPerRun: 12`. A `null` limit is
+  still unset, and `--unattended` is still refused before any adapter starts
+  while either limit is unset (v3-unattended).
+- The unattended refusal message names run limits, not budgets, and
+  `docs/YUKL_ARCHITECTURE.md` sections 4.2, 4.5 and 4.7 describe the enforced
+  limits while new sections 4.13 and 4.14 document the scheduler and the lock
+  broker (v3-unattended).
 - `yukl init`: installs the harness into a target repository on a feature
   branch without overwriting anything it already has. It refuses (exit 1, no
   writes) outside a Git repo, on the default branch, on a detached HEAD, on a

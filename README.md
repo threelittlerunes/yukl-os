@@ -24,11 +24,18 @@ An agent cannot finish a task without writing executable proof to `.orchestratio
 <!-- status: implemented tests=tests/rules.test.js#CLAUDE.md section 2 routes every rule file (V-1) -->
 An agent receives only the rule files matching the paths it is allowed to touch, and the build checks that the root router points at every rule file.
 
+### Unattended runs and run limits
+<!-- status: implemented tests=tests/command-run.test.js#an unattended run stops on a breached agent-start limit and records it -->
+`yukl run <task_id> --unattended` keeps driving one task until it is terminal, needs a human, escalates or breaches a run limit, waiting for running stages instead of stopping on them. The two run limits (`maxWallMinutesPerRun`, `maxAgentStartsPerRun`) are enforced: a breach appends an `enforcement` event and stops the run.
+
+### Parallel scheduling and advisory locks
+<!-- status: implemented tests=tests/command-schedule.test.js#schedule runs a wave concurrently and starts the next wave only after it settles -->
+`yukl schedule` drives several tasks unattended, each in its own Git worktree: tasks whose `allowed_paths` do not overlap run in parallel and overlapping ones are serialised, with a `.orchestration/locks/` advisory lock per task so no two schedulers drive the same task.
+
 ## Planned features
 <!-- status: planned -->
 
 - **Coercive retry loops** - a failed audit would route the work deterministically back to implementation, up to `maxRetries`. The intervention table and the stage machine exist; the process kill and worktree removal do not.
-- **Run budgets and unattended runs** - `yukl.policy.json` declares wall-clock, token and agent-start budgets, but nothing enforces them yet, so `yukl run --unattended` is refused while they are null.
 - **The Phase 5 feedback loop** - see [docs/SDLC_PLAN.md](docs/SDLC_PLAN.md).
 
 ## Pipeline
@@ -104,7 +111,19 @@ in a hash-chained log:
   stage machine, the autonomy policy, path enforcement, failure diagnosis and
   the runtime and VCS adapters named in the `lifecycle` block of
   `yukl.config.json`, then loops until the task blocks, needs a human,
-  escalates or finishes. `--once` takes a single step.
+  escalates or finishes. `--once` takes a single step. `--unattended` waits for
+  a running stage instead of stopping on it and keeps driving the task until it
+  is terminal, needs a human, escalates or breaches a run limit; it is refused
+  unless both run limits in `yukl.policy.json` are positive integers.
+- `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended,
+  each in its own worktree under `.orchestration/worktrees/`. Tasks whose
+  intents' `allowed_paths` cannot overlap run in the same wave, in parallel;
+  overlapping ones are serialised into later waves. Each task takes a
+  `.orchestration/locks/<task_id>.lock` advisory lock while it runs.
+- `yukl lock <hold|status|release> <name> [--task <id>] [-- <command>]` is the
+  advisory lock broker: `hold` acquires the lock, runs the command and releases
+  it however the command ends, and a lock whose recorded process is gone is
+  reclaimed by the next acquirer.
 - `yukl status <task_id> [--state-dir <dir>] [--base <ref>]` folds the log to
   its state, prints the last decision, verifies the hash chain and checks the
   log against the newest `Yukl-Run-Head` trailer on the base branch.
