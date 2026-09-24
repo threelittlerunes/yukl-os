@@ -351,10 +351,12 @@ the anchors, path enforcement, the failure diagnosis and the runtime and VCS
 adapters named in the `lifecycle` block of `yukl.config.json`, then drives the
 task: with `--once` it takes a single engine step, otherwise it loops until the
 lifecycle is terminal, a stage needs a human, the diagnosis escalates, a stage
-is running or a gate is unsatisfied, or 64 steps have passed. `--unattended`
-replaces the step cap with the run limits (section 4.7): the loop waits for a
-running stage instead of stopping on it and keeps driving the task until it is
-terminal, needs a human, escalates or breaches a run limit, and it is refused
+is running or a gate is unsatisfied, or 64 steps have passed; the two run
+limits (section 4.7) bound that loop too, so an attended run stops on a breach
+exactly as an unattended one does. `--unattended` replaces the step cap with the
+run limits: the loop waits for a running stage instead of stopping on it and
+keeps driving the task until it is terminal, needs a human, escalates or
+breaches a run limit, and it is refused
 before any adapter starts unless both run limits are positive integers. The
 exit code is 0 when the run advanced or stopped cleanly, 1 on a refusal, an
 enforcement stop or an error, and 2 on a usage problem. With `--base`, the
