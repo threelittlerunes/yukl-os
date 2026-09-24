@@ -1,0 +1,16 @@
+intent:
+  goal: "Bridge the gap between Jujutsu (jj) and Orca. Orca natively uses Git, meaning new workers branch from main and miss uncommitted jj working-copy snapshots. Implement a solution (e.g. a wrapper script, new yukl command, or orchestration hook) that utilizes both jj and git commits to seamlessly synchronize the jj working copy into Git before an Orca worker is dispatched, ensuring the worker inherits the latest state."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "scripts/commands/**"
+      - "scripts/yukl.js"
+      - "tests/**"
+      - ".orchestration/contracts/v3-w2-vcs-sync.json"
+    forbidden_paths:
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+
+consultation:
+  requires_human_approval: false
