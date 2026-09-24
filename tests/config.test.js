@@ -18,7 +18,7 @@ test("flow.config.json parses and satisfies the pipeline schema", () => {
   assert.deepEqual(errors, []);
 });
 
-test("orca.yaml and flow.config.json route the drafting runtime to omp and validate (task routing-omp)", () => {
+test("orca.yaml, flow.config.json and yukl.config.json route the drafting runtime to omp and validate (task routing-omp)", () => {
   const orca = readYaml("orca.yaml");
   assert.equal(orca.agents.drafter.agent, "omp", "orca.yaml must route the drafter to omp");
 
@@ -26,6 +26,27 @@ test("orca.yaml and flow.config.json route the drafting runtime to omp and valid
   const drafter = flow.pipeline.find((s) => s.id === "expert-power-drafter");
   assert.ok(drafter, "expert-power-drafter stage is required");
   assert.equal(drafter.agent, "omp", "the drafter stage must route to omp");
+
+  // orca.yaml and flow.config.json describe the pipeline, but `yukl run`
+  // dispatches a stage from yukl.config.json (lifecycle.runtimes), so the two
+  // above can both say omp while a live run still starts opencode.
+  const yukl = readJson("yukl.config.json");
+  const runtimes = yukl.lifecycle?.runtimes ?? {};
+  assert.equal(
+    runtimes.implement?.agent,
+    "omp",
+    "yukl.config.json must route the implement stage to omp",
+  );
+  assert.equal(
+    runtimes.audit?.agent,
+    "antigravity",
+    "yukl.config.json must leave the audit stage on antigravity",
+  );
+  assert.equal(
+    runtimes.review?.agent,
+    "antigravity",
+    "yukl.config.json must leave the review stage on antigravity",
+  );
 
   assert.ok(ALLOWED_AGENTS.includes("omp"), "omp must be an allowed agent");
 
