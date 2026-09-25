@@ -37,7 +37,7 @@ Agents cannot just claim a task is complete. They must "persuade" the orchestrat
 
 ### Coercive Power (Kill-Switches)
 <!-- status: planned -->
-Implement lightweight middleware that monitors API budgets and token usage. If an agent loops endlessly or breaches its financial quota, the system exercises coercive power to instantaneously terminate the session. Not built: `yukl.policy.json` declares the run budgets but nothing enforces them (section 4.7 of `docs/YUKL_ARCHITECTURE.md`).
+Implement lightweight middleware that monitors API budgets and token usage. If an agent loops endlessly or breaches its financial quota, the system exercises coercive power to instantaneously terminate the session. Not built as described: there is no token or cost meter, and `maxTokensPerRun` has been removed rather than enforced, because no adapter can measure tokens. What is enforced are the two run limits - `maxWallMinutesPerRun` and `maxAgentStartsPerRun` stop a run that breaches them by appending an `R-RUN-LIMIT` enforcement event - and that stop ends the run, it does not kill the agent process. Section 4.7 of `docs/YUKL_ARCHITECTURE.md` has the details.
 
 ## Phase 5: Institutional Memory & Self-Improvement (Future Work)
 <!-- status: planned -->

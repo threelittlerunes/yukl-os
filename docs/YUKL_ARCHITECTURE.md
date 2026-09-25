@@ -362,7 +362,11 @@ exit code is 0 when the run advanced or stopped cleanly, 1 on a refusal, an
 enforcement stop or an error, and 2 on a usage problem. With `--base`, the
 `lifecycle` block and the policy are read from that ref through `git show`, so a
 task branch cannot name its own runtimes; without `--base` the working tree is
-read, which is a local preview rather than a trust boundary.
+read, which is a local preview rather than a trust boundary. In a Jujutsu
+workspace (section 4.15) every agent start first publishes the working copy as
+the Git branch `yukl-wc`, and the worker branches from that ref even when
+`--base` is given, because `--base` governs what the run reads - the config, the
+policy, path enforcement and the merge target - not where the worker starts.
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
@@ -566,7 +570,70 @@ the same record is never removed. The guard records its own owner like any lock,
 so a reclaimer that crashed mid-reclaim leaves a stale guard that the next
 acquirer reclaims in turn rather than a permanent wedge.
 
-### 4.15 Known limits
+### 4.15 Working-copy publication: `yukl vcs-sync`
+<!-- status: implemented tests=tests/command-vcs-sync.test.js#syncJjWorkingCopy publishes an undescribed working copy and points the Git branch at it -->
+
+`yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
+working copy of a colocated Jujutsu workspace (`@`) as the Git branch `yukl-wc`,
+or as `--bookmark <name>`. The gap it closes is Orca's: a worker's worktree is
+branched from a Git ref, and work that lives only in `@` - Jujutsu snapshots the
+working copy on every command, so most of it is never committed by hand - is
+invisible to a worker branched from the branch tip, which silently misses it.
+`yukl run` calls the same function (`syncJjWorkingCopy`) immediately before
+every agent start it makes (section 4.2), so the sync is a dispatcher hook
+rather than a step someone has to remember, and a long run that dispatches
+several stages republishes the state as it is at each dispatch.
+
+The sync moves a bookmark and exports it and never edits `@`: an undescribed
+working-copy commit is exported exactly as it is - Jujutsu's own `jj git push`
+still refuses to publish such a commit - a description its author wrote is left
+byte-for-byte alone, and files Jujutsu ignores (`node_modules`, `.env`) are not
+part of the snapshot. It reads `@` once, sets the bookmark to it with
+`--allow-backwards`, exports through `jj git export`, and then asks Git to
+resolve `refs/heads/<bookmark>` to that commit: the ref counts as published only
+when Git confirms it, so a sync that cannot be proven does not pass as one.
+
+Which bookmarks may move is decided before anything is written. `yukl-wc` is the
+harness's own namespace, so it is movable whether Git already names the previous
+published `@` or names no such ref yet. Any other bookmark moves only when it
+already points at `@`, where the sync merely republishes what Git is missing;
+everything else is a ref the user owns, and it is refused instead of rewritten.
+
+It fails closed - exit 1, nothing published, and the dispatch it guards is
+refused - rather than publishing a state it cannot vouch for:
+
+- **A workspace that cannot be read.** A `.jj` entry at or above the working
+  directory (the walk stops at the filesystem root) means a workspace is
+  unmistakably there, so jj missing, or `jj root` exiting non-zero, is an error
+  naming the directory that holds `.jj` and jj's first stderr line; only a tree
+  with no `.jj` anywhere is treated as not a Jujutsu workspace at all. A
+  Jujutsu-only repository (`.jj` without `.git`) is refused with the
+  `jj git colocation enable` message that `yukl verify` also uses.
+- **A bookmark jj will not vouch for.** A conflicted bookmark, a bookmark that
+  names no single commit, a row the sync cannot read, a name jj reports more
+  than once, and a `jj bookmark list` that fails outright are all refused.
+  Reading an unresolved conflict as "missing" is what would let
+  `--allow-backwards` overwrite it with `@`.
+- **A bookmark that tracks a remote.** Moving it would rewrite a ref other
+  people already see, so it is refused - and so is a jj that cannot answer the
+  question, because assuming "no remote" is how a published ref gets rewritten.
+  The default `yukl-wc` is refused on that ground too.
+- **A custom bookmark that does not already point at `@`.** It is refused with
+  the working-copy commit id, since `--allow-backwards` would otherwise drag a
+  real branch onto the working copy.
+- **Git that cannot confirm the export.** When `refs/heads/<bookmark>` does not
+  resolve to the commit jj exported, the sync reports that the working copy was
+  not published.
+
+A plain Git repository is not a mistake: with no Jujutsu workspace anywhere the
+command exits 0, reports "no Jujutsu workspace" and publishes nothing. Exit 1
+means a Jujutsu workspace could not be published, and exit 2 is a usage problem
+(an unknown flag, a missing value, a stray positional, or a `--bookmark` that is
+not Git-branch-shaped, all refused before jj is spawned). `--json` prints the
+result object on one line instead of the human summary, so a calling hook can
+read it.
+
+### 4.16 Known limits
 <!-- status: background -->
 
 Four limits bound what the machinery above can prove, and they are worth
