@@ -1,0 +1,27 @@
+intent:
+  goal: "Bring the documentation in line with what v3 shipped. Document `yukl vcs-sync` and how `yukl run` publishes the Jujutsu working copy (branch yukl-wc) before every agent start, including that the worker branches from it even when --base is given; add it to the README command list, a YUKL_ARCHITECTURE.md section with a status marker tied to its tests, and the CHANGELOG. Correct docs/SDLC_PLAN.md where it still says run limits are not enforced. Ignore lock reclaim guards (*.lock.reclaim) in .gitignore."
+  depends_on:
+    - "v3-unattended"
+    - "routing-omp"
+  scope:
+    allowed_paths:
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "docs/SDLC_PLAN.md"
+      - "CHANGELOG.md"
+      - ".gitignore"
+      - ".orchestration/contracts/v3-docs.json"
+    forbidden_paths:
+      - "scripts/**"
+      - "tests/**"
+      - "package.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - "orca.yaml"
+      - "flow.config.json"
+      - ".orchestration/intents/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+
+consultation:
+  requires_human_approval: false
