@@ -1,0 +1,23 @@
+intent:
+  goal: "Make the Orca runtime adapter honour the runtime interface the lifecycle engine enforces, so `yukl run` can drive a real Orca worker. `start` returns the Orca dispatch id as a non-empty string handle; `status`, `result` and `stop` accept that string and treat anything else as a foreign handle; `result` maps a settled Orca outcome to `{ exitCode: 0 }` for succeeded and `{ exitCode: 1 }` for failed, and returns null while unsettled; `worker-start` omits `--base-branch` when no base is known instead of passing an empty string. An integration test drives `yukl run --once` through the real adapter and the fake Orca from start to an advanced stage, and the shipped handle shape fails it."
+  scope:
+    allowed_paths:
+      - "scripts/adapters/orca.js"
+      - "tests/adapter-orca.test.js"
+      - "tests/engine-orca.test.js"
+      - "tests/fixtures/fake-orca/**"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-06-adapter-handle-contract.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/lifecycle/**"
+      - "scripts/commands/**"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+consultation:
+  requires_human_approval: false
