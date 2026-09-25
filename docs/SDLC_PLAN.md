@@ -9,7 +9,7 @@ constitution, which the build checks.
 
 ### Situational Control (Native Sandboxing)
 <!-- status: background -->
-Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated. Worktree isolation is provided by the runner, not by a test.
+Control the agent by controlling its environment. Use native **Git worktrees** to isolate parallel agents. This lets multiple agents operate concurrently across numbered terminal tabs without overwriting each other's files. It provides true filesystem isolation for the SWE while remaining a "surprisingly vanilla" and frictionless setup for the vibecoder. Git is required; Jujutsu is supported when colocated. Worktree isolation is provided by the runner for hand-started agents, and by `yukl schedule`, which gives each task its own worktree under `.orchestration/worktrees/<task_id>` and has a test for it (`tests/command-schedule.test.js`).
 
 ### Legitimate Power (The Orchestrator)
 <!-- status: implemented tests=tests/rules.test.js#CLAUDE.md stays under the 60-line root cap -->
@@ -23,9 +23,9 @@ Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to
 
 ## Phase 3: Autonomous Orchestration (The Loops)
 <!-- status: planned -->
-**"Loops Do The Work":** Implement continuous scheduling mechanics (like a `/loop` command). Instead of manually triggering agents, configure them to run via cron jobs overnight to autonomously babysit PRs, auto-rebase branches, or repeatedly attempt to fix flaky CI tests.
+**"Loops Do The Work":** Implement continuous scheduling mechanics (like a `/loop` command). Instead of manually triggering agents, configure them to run via cron jobs overnight to autonomously babysit PRs, auto-rebase branches, or repeatedly attempt to fix flaky CI tests. Built: the loop mechanism itself - `yukl run --unattended` and the scheduler described below. Still not built: the trigger layer and the PR-babysitting loops.
 
-**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool. Not built: `yukl run` drives one task to a stopping point and then returns; there is no scheduler and no cron entry.
+**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool. Built: `yukl run --unattended` keeps driving a task until it is terminal, needs a human, escalates or breaches a run limit, and `yukl schedule` runs tasks whose scopes cannot overlap in parallel worktrees while serialising the rest. Still not built: cron or overnight triggering and the PR-babysitting loops. Sections 4.7 and 4.13 of `docs/YUKL_ARCHITECTURE.md` document both commands.
 
 ## Phase 4: Coercive Guardrails & Rational Persuasion
 <!-- status: background -->
@@ -60,7 +60,7 @@ Implement lightweight middleware that monitors API budgets and token usage. If a
 ### Open scoping questions (must be answered before planning)
 <!-- status: planned -->
 
-1. **Runtime dependency:** Prerequisite 2 (the contract-and-audit loop in active use) cannot be met until the render/verify runtime exists, because nothing has executed the pipeline end to end before it. Phase 5 is blocked on that runtime.
+1. **Runtime dependency:** The render/verify runtime now exists - `yukl render`, `yukl run` (attended and unattended; section 4.7 of `docs/YUKL_ARCHITECTURE.md`) and `yukl verify` drive the stage machine end to end, and this repository's CI already runs `yukl verify --base` on every pull request (`.github/workflows/ci.yml`) against the contracts merged in `.orchestration/contracts/`. Prerequisite 2 is therefore no longer blocked on missing tooling; what remains is the maintainer's call on whether that usage satisfies "in active use on at least one repository".
 2. **Human decisions:** Prerequisites 3 (a scoped GitHub token / App) and 4 (a written review policy for automated edits to `CLAUDE.md` and `AGENTS.md`) are decisions for the repository maintainer, not for the harness.
 3. **Signal definition:** Undecided which PR events count as a correction: review comments, commits that apply a suggested change, or reviews that request changes.
 4. **Digestion:** Summarising corrections requires an LLM call from GitHub Actions, which means an API secret, a cost budget, and a choice of model. All undecided.
