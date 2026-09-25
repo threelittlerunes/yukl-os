@@ -343,7 +343,7 @@ agents but a human can pull the task out of it. The `scope` stage may skip
 `plan` only when the skip records a decision rule.
 
 ### 4.2 `yukl run`
-<!-- status: implemented tests=tests/engine-orca.test.js#an in-scope worker commit advances implement and anchors at the worker's HEAD -->
+<!-- status: implemented tests=tests/engine-orca.test.js#the anchor is the worker's contract commit, not the orchestrator's -->
 
 `yukl run <task_id> [--unattended] [--once] [--cwd <dir>] [--base <git-ref>]`
 is the composition root. It loads the per-task event log, the stage machine,
@@ -377,9 +377,11 @@ blocks the next step instead (section 4.8).
 An agent stage is judged where its worker committed. When the runtime of the
 stage's adapter implements the optional `workspace(handle)` of section 4.11,
 `yukl run` reads the stage's handle from the task log's last `stage_started`
-event for that stage, resolves that checkout's `HEAD` with
-`git -C <path> rev-parse HEAD`, and uses that commit as the stage's anchor and
-as the branch that path enforcement diffs against `--base` - instead of the
+event for that stage and resolves that checkout's `HEAD` with
+`git -C <path> rev-parse HEAD`; the stage's anchor is then the last commit that
+touched the task's contract in that checkout, falling back to that checkout's
+`HEAD` when no commit there touches the contract yet, and path enforcement
+diffs that `HEAD` against `--base` - instead of anchoring and enforcing the
 orchestrator checkout's `HEAD` and its current branch. An Orca worker commits
 in its own Git worktree, so the orchestrator's `HEAD` is the wrong commit to
 judge, and a `--base` run used to diff `base...base` (nothing) and pass an
