@@ -58,7 +58,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   id") after Orca had already started one worker, and the outcome word was read
   as an exit code of null; both are regression-guarded by
   `tests/engine-orca.test.js`, which drives `yukl run --once` through the real
-  adapter and the fake Orca from a start to an advanced stage (ha-06).
+  adapter and the fake Orca from a start to an advanced stage, and whose second
+  test - `an exited worker with no settled outcome is refused, not advanced` -
+  drives an exited worker whose outcome is neither `succeeded` nor `failed` and
+  asserts the engine refuses that poll instead of advancing it (ha-06).
 - The Orca adapter omits `--base-branch` from `worker-start` entirely when no
   base is known (`baseBranch` null, undefined or `""`) instead of passing an
   empty string, so it relies on Orca's documented "omit `--base-branch` to use

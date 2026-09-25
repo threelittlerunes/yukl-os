@@ -19,6 +19,11 @@ import { appendEvent, readEvents } from "../scripts/lifecycle/events.js";
 // repository and asserts the whole chain: one worker-start, the dispatch id
 // recorded as the handle, and the next step advancing `implement -> prove`
 // once worker-show reports the worker exited and its outcome succeeded.
+//
+// The second test covers the other side of the same mapping: an exited worker
+// whose outcome is neither `succeeded` nor `failed` yields no exit code, and
+// the engine refuses that poll - `stage_failed` with `runtimeRefused` - rather
+// than advancing or silently succeeding the stage.
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_ORCA = join(ROOT, "tests", "fixtures", "fake-orca", "fake-orca.js");
@@ -117,6 +122,50 @@ function readCalls(logPath) {
 }
 
 /**
+ * The injected dependencies shared by both integration tests: the real Orca
+ * adapter driving the fake CLI, a VCS stub whose merge never runs, and anchors
+ * that resolve every stage to the seed commit.
+ */
+function runOverrides() {
+  return {
+    createRuntime: (entry) =>
+      createOrcaRuntime({ orca: [process.execPath, FAKE_ORCA], agent: entry.agent }),
+    createVcs: () => ({
+      name: "vcs-github",
+      checks: async () => ({ ok: false, results: [] }),
+      merge: async () => ({ ok: false, error: "stub vcs" }),
+    }),
+    anchors: {
+      anchorStage: async (stage) => ({
+        ok: true,
+        anchor: { path: `${stage}.md`, commit: SEED_COMMIT },
+      }),
+    },
+  };
+}
+
+/**
+ * Point the fake Orca at `scenario` and append its calls to `logPath` for the
+ * duration of `fn`, restoring the previous environment afterwards.
+ */
+async function withFakeOrca({ scenario, logPath }, fn) {
+  const scenarioPath = join(dirname(logPath), "scenario.json");
+  writeFileSync(scenarioPath, JSON.stringify(scenario));
+  const savedLog = process.env.FAKE_ORCA_LOG;
+  const savedScenario = process.env.FAKE_ORCA_SCENARIO;
+  process.env.FAKE_ORCA_LOG = logPath;
+  process.env.FAKE_ORCA_SCENARIO = scenarioPath;
+  try {
+    return await fn();
+  } finally {
+    if (savedLog === undefined) delete process.env.FAKE_ORCA_LOG;
+    else process.env.FAKE_ORCA_LOG = savedLog;
+    if (savedScenario === undefined) delete process.env.FAKE_ORCA_SCENARIO;
+    else process.env.FAKE_ORCA_SCENARIO = savedScenario;
+  }
+}
+
+/**
  * Build the temporary repository the run reads: a git checkout with one
  * commit, the `implement -> orca/omp` lifecycle block, the repository's own
  * policy, the adapter shims and a log seeded at `implement`. Returns the state
@@ -150,46 +199,20 @@ function writeRepo(dir) {
 test("yukl run --once drives a real-adapter start to an advanced stage", async () => {
   await withTempDir(async (dir) => {
     const { stateDir, logPath } = writeRepo(dir);
-    const scenarioPath = join(dir, "scenario.json");
-    writeFileSync(
-      scenarioPath,
-      JSON.stringify({
-        "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_1" } } },
-        "worker-show": {
-          json: {
-            ok: true,
-            result: {
-              projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
-            },
+    const scenario = {
+      "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_1" } } },
+      "worker-show": {
+        json: {
+          ok: true,
+          result: {
+            projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
           },
         },
-      }),
-    );
+      },
+    };
 
-    const savedLog = process.env.FAKE_ORCA_LOG;
-    const savedScenario = process.env.FAKE_ORCA_SCENARIO;
-    process.env.FAKE_ORCA_LOG = logPath;
-    process.env.FAKE_ORCA_SCENARIO = scenarioPath;
-
-    try {
-      const overrides = {
-        createRuntime: (entry) =>
-          createOrcaRuntime({
-            orca: [process.execPath, FAKE_ORCA],
-            agent: entry.agent,
-          }),
-        createVcs: () => ({
-          name: "vcs-github",
-          checks: async () => ({ ok: false, results: [] }),
-          merge: async () => ({ ok: false, error: "stub vcs" }),
-        }),
-        anchors: {
-          anchorStage: async (stage) => ({
-            ok: true,
-            anchor: { path: `${stage}.md`, commit: SEED_COMMIT },
-          }),
-        },
-      };
+    await withFakeOrca({ scenario, logPath }, async () => {
+      const overrides = runOverrides();
 
       const first = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
       assert.equal(first.code, 0, first.err);
@@ -230,11 +253,67 @@ test("yukl run --once drives a real-adapter start to an advanced stage", async (
       );
       assert.equal(starts[0][starts[0].indexOf("--agent") + 1], "omp");
       assert.equal(starts[0][starts[0].indexOf("--name") + 1], TASK);
-    } finally {
-      if (savedLog === undefined) delete process.env.FAKE_ORCA_LOG;
-      else process.env.FAKE_ORCA_LOG = savedLog;
-      if (savedScenario === undefined) delete process.env.FAKE_ORCA_SCENARIO;
-      else process.env.FAKE_ORCA_SCENARIO = savedScenario;
-    }
+    });
+  });
+});
+
+test("an exited worker with no settled outcome is refused, not advanced", async () => {
+  await withTempDir(async (dir) => {
+    const { stateDir, logPath } = writeRepo(dir);
+    const scenario = {
+      "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_stuck" } } },
+      // Exited, but the outcome is neither `succeeded` nor `failed`, so the
+      // adapter's `result` maps it to null and the engine must read the poll as
+      // a refusal rather than as a success with a missing exit code.
+      "worker-show": {
+        json: {
+          ok: true,
+          result: {
+            projection: { liveness: { verdict: "exited" }, outcome: "in_progress" },
+          },
+        },
+      },
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      const overrides = runOverrides();
+
+      const first = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
+      assert.equal(first.code, 0, first.err);
+      assert.match(first.out, /yukl run: started at implement/);
+
+      const second = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
+      assert.equal(second.code, 1, "a refused stage is not a clean step");
+      assert.doesNotMatch(second.out, /advanced/);
+      assert.match(second.out, /yukl run: failed at implement/);
+
+      const events = readEvents(stateDir, TASK).events;
+      const done = events.filter(
+        (event) => event.type === "stage_done" && event.data.stage === "implement",
+      );
+      assert.equal(done.length, 0, "implement is never closed");
+      const opened = events.filter((event) => event.type === "stage_started");
+      assert.equal(opened.length, 1, "the task stays at implement, with its one open start");
+
+      // The engine records a refusal as a `stage_failed` carrying the
+      // `runtimeRefused` observation (it never treats the missing exit code as
+      // one of its own).
+      const failed = events.filter(
+        (event) => event.type === "stage_failed" && event.data.stage === "implement",
+      );
+      assert.equal(failed.length, 1, "one stage_failed is recorded for implement");
+      assert.equal(failed[0].data.runtime, "orca");
+      assert.deepEqual(failed[0].data.observation, {
+        stage: "implement",
+        runtimeRefused: true,
+      });
+
+      const calls = readCalls(logPath);
+      const starts = calls.filter((argv) => argv[1] === "worker-start");
+      assert.equal(starts.length, 1, "the refusal never starts a second worker");
+      const shows = calls.filter((argv) => argv[1] === "worker-show");
+      assert.ok(shows.length > 0, "the poll asked Orca about the recorded handle");
+      assert.equal(shows[0][shows[0].indexOf("--dispatch") + 1], "ctx_fake_stuck");
+    });
   });
 });
