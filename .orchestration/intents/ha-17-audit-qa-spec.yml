@@ -1,0 +1,30 @@
+intent:
+  goal: "The engine's audit and review stages run their agent evidence-in, in the QA worktree the coordinator prepared for the task, instead of a fresh random worktree without the evidence. The QA worktree's name is derived from the task id by the naming convention, `qa-<task_id>`, so no config key is needed. The Orca adapter starts an audit or review agent with `--worktree name:qa-<task_id>` and omits every creation flag (`--name`, `--base-branch`) that Orca rejects for an existing worktree. When that worktree does not exist, the stage blocks with R-NEEDS-HUMAN naming it and starts nothing. `yukl spec --stage audit|review` renders `templates/qa-spec.md` (evidence-in: no shell commands, no writes, the fixed evidence file names, questions naming exact files). The architecture doc states that the audit stage is attended until issue 005 is solved: the coordinator creates `qa-<task_id>` at the target, prepares the evidence bundle in it and removes it after the verdict, and the auditor still stops at a permission prompt for any shell command, including its own worker_done."
+  depends_on:
+    - "ha-12-spec-command"
+  scope:
+    allowed_paths:
+      - "scripts/adapters/orca.js"
+      - "scripts/lifecycle/runtime.js"
+      - "scripts/commands/spec.js"
+      - "scripts/commands/run.js"
+      - "templates/qa-spec.md"
+      - "tests/adapter-orca.test.js"
+      - "tests/command-run.test.js"
+      - "tests/command-spec.test.js"
+      - "tests/fixtures/fake-orca/**"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-17-audit-qa-spec.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/lifecycle/engine.js"
+      - "scripts/lifecycle/stages.js"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+consultation:
+  requires_human_approval: false
