@@ -363,14 +363,16 @@ enforcement stop or an error, and 2 on a usage problem. With `--base`, the
 `lifecycle` block and the policy are read from that ref through `git show`, so a
 task branch cannot name its own runtimes; without `--base` the working tree is
 read, which is a local preview rather than a trust boundary. In a Jujutsu
-workspace (section 4.15) every agent start first publishes the working copy as
+workspace (section 4.16) every agent start first publishes the working copy as
 the Git branch `yukl-wc`, and the worker branches from that ref even when
 `--base` is given, because `--base` governs what the run reads - the config, the
 policy, path enforcement and the merge target - not where the worker starts. A
 start is recorded before it is made: the run never repeats a start whose outcome
 is unknown - the step blocks with `R-NEEDS-HUMAN` (section 4.8) - and a runtime
 whose `start` throws is recorded as a `stage_failed` and fails the run with the
-original error.
+original error, unless the throw says the start's outcome itself is unknown
+(the Orca adapter's failed stop), which records a `stage_start_unknown` and
+blocks the next step instead (section 4.8).
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
@@ -485,7 +487,28 @@ exits 1 with the runtime's message. Because that `stage_failed` closes the
 `stage_starting`, a later step is not mistaken for an unknown outcome: it starts
 the stage again if and only if the recorded diagnosis chose retry. This covers a
 runtime that refuses before any worker exists as well as the Orca adapter's
-failed `worker-start`, which stops the worker it created first (section 4.17).
+failed `worker-start`, which stops the worker it created first whenever that
+stop succeeds (section 4.17).
+
+One throw is the exception, and it is the Orca adapter's failed stop. When
+`worker-start` fails and names a worker it created, but `worker-stop` cannot be
+proven to have stopped it - a spawn error, a non-zero exit, `ok: false` or an
+unparseable reply - the start's outcome is exactly as unknown as a crash between
+the runtime call and the record: the adapter's error says the residual worker
+"may still be running" and carries `startOutcomeUnknown`. The engine then
+appends a `stage_start_unknown` event (`stage`, `runtime`,
+`observation.startError`) instead of a `stage_failed`, runs no diagnosis,
+appends no `decision`, and rethrows. Because nothing closes the
+`stage_starting`, the next step blocks with `R-NEEDS-HUMAN` exactly as it does
+for a crash, so a retry can never start a second worker beside one that may
+still be live; a `human_decision` that names the stage clears it as above. This
+is the one throw that is not diagnosed as a failure, made so that a start whose
+residual worker could not be stopped is never retried. Guards:
+`a start whose residual worker could not be stopped blocks the next step
+instead of retrying` (engine), `a failed worker-stop leaves the start outcome
+unknown and never claims the worker stopped` (adapter) and, over the real
+composition root, `a failed worker-stop over the real adapter blocks the next
+run instead of starting a second worker`.
 
 A human decision that names the stage clears the unknown start - the `data.to`
 that `yukl decide override --to <stage>` persists, or a `data.stage` - and the
@@ -534,12 +557,15 @@ check even though its chain verifies.
 
 A runtime adapter implements `start`, `status`, `result` and `stop`. A `start`
 returns the runtime's handle and may throw, in which case the engine records the
-refusal as a `stage_failed` and rethrows it (section 4.8). The
-bundled adapters include `fake` (a scripted test double), `orca` (drives the
-Orca CLI through argument arrays) and `vcs-git-local` (merges through local
-git); `vcs-github` merges through the GitHub CLI, and each adapter file has its
-own test suite. The bundled Orca adapter's handle, result and base-branch
-shapes are specified in section 4.17.
+refusal as a `stage_failed` and rethrows it (section 4.8). The engine normalises
+whatever `start` returns through `handleId`: a non-empty string id, or an object
+carrying one as `id`, is accepted and recorded in `stage_started.data.handle`,
+while anything else is refused with `runtime.start must return a non-empty
+string handle id`. The bundled adapters include `fake` (a scripted test
+double), `orca` (drives the Orca CLI through argument arrays) and
+`vcs-git-local` (merges through local git); `vcs-github` merges through the
+GitHub CLI, and each adapter file has its own test suite. The bundled Orca
+adapter's handle, result and base-branch shapes are specified in section 4.17.
 
 ### 4.12 The lifecycle directory stays adapter-neutral
 <!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
@@ -697,7 +723,7 @@ interface of section 4.11, and four of its behaviours are load-bearing.
 **The handle is the dispatch id string.** `start` returns the Orca dispatch id
 itself - a non-empty string - and `status`, `result` and `stop` accept that
 string back. The engine normalises a start's return value through `handleId`
-(section 4.1), which accepts a string or `{ id }` and refuses everything else,
+(section 4.11), which accepts a string or `{ id }` and refuses everything else,
 then records the id in `stage_started.data.handle` and hands it back on every
 poll. The shipped `{ dispatchId }` object was refused by that check after Orca
 had already started a worker, so the run could never advance; the bare id is
@@ -724,14 +750,25 @@ worker; a failed or `outcome_unknown` call exits 1 and may already have created
 the worker, naming it either as `result.dispatchId` or among the
 `residualResources` it reports. When the reply names such an id, `start` calls
 `worker-stop` on it before throwing, and the error names the id and the
-`residualResources`, so a failed start cannot leave a live worker behind an
-unrecorded handle; the engine records the refusal as `stage_starting` plus
-`stage_failed` and the run exits 1 (section 4.8). A reply that names no worker
+`residualResources`; the engine records the refusal as `stage_starting` plus
+`stage_failed` and the run exits 1 (section 4.8). The stop is checked, not
+assumed: only a `worker-stop` that exits 0 with a reply that parses as a JSON
+object which does not say `ok: false` is reported as "stopped residual worker
+<id>". A stop that fails - a spawn error, a non-zero exit, `ok: false` or an
+unparseable reply - instead throws an error that says the residual worker "may
+still be running", carries the `residualResources` and the start detail, and
+sets `startOutcomeUnknown = true`, which the engine turns into a
+`stage_start_unknown` block rather than a diagnosed failure (section 4.8). A
+failed start can therefore leave a live worker only behind that one block, which
+asks a human to resolve it and starts nothing; it is never retried while the
+worker may still be running. A reply that names no worker
 stops nothing, because stopping an id the adapter invented would be worse than
-leaving Orca to clean up. `tests/adapter-orca.test.js` guards both cases - `a
-failed worker-start that names a dispatch stops it before throwing` (which also
-covers a reply that names the worker only inside `residualResources`) and `a
-failed worker-start with no dispatch id stops nothing`.
+leaving Orca to clean up. `tests/adapter-orca.test.js` guards all three cases -
+`a failed worker-start that names a dispatch stops it before throwing` (which
+also covers a reply that names the worker only inside `residualResources`),
+`a failed worker-stop leaves the start outcome unknown and never claims the
+worker stopped` (non-zero exit, `ok: false` and unparseable replies) and
+`a failed worker-start with no dispatch id stops nothing`.
 
 The start is also refused before any Orca command when it has no spec, no
 configured agent or no derivable worker name (a `name`, a `taskId` or a
@@ -755,7 +792,13 @@ over the real adapter stops the named dispatch and records stage_failed` -
 drives a failed `worker-start` that names a dispatch and asserts the whole
 chain: the adapter stops that dispatch, the run exits 1 with the adapter's
 message, and the log holds `stage_starting`, `stage_failed` carrying
-`observation.startError`, and the diagnosis's `decision`.
+`observation.startError`, and the diagnosis's `decision`. A fourth - `a failed
+worker-stop over the real adapter blocks the next run instead of starting a
+second worker` - makes that same `worker-start` fail while `worker-stop` fails
+too, and asserts the opposite outcome: the log holds `stage_starting` and
+`stage_start_unknown`, with no `stage_failed` and no `decision`, and a second
+`run --once` blocks with `R-NEEDS-HUMAN` after exactly one logged
+`worker-start`.
 
 ### 4.18 Known limits
 <!-- status: background -->

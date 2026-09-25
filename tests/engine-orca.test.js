@@ -375,3 +375,66 @@ test("a failed worker-start over the real adapter stops the named dispatch and r
     });
   });
 });
+
+test("a failed worker-stop over the real adapter blocks the next run instead of starting a second worker", async () => {
+  await withTempDir(async (dir) => {
+    const { stateDir, logPath } = writeRepo(dir);
+    // worker-start exits 1 and names the worker it created, but worker-stop
+    // cannot prove it stopped. The adapter refuses to claim the worker was
+    // stopped, so the start's outcome is unknown: the engine records
+    // `stage_start_unknown` with no diagnosis, and the next run blocks for a
+    // human rather than starting a second worker beside a possibly live one.
+    const scenario = {
+      "worker-start": {
+        exitCode: 1,
+        json: {
+          ok: false,
+          result: {
+            dispatchId: "ctx_fake_residual",
+            stage: "starting",
+            residualResources: [{ kind: "worker", dispatchId: "ctx_fake_residual" }],
+          },
+        },
+      },
+      "worker-stop": { exitCode: 1, stderr: "stop refused" },
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      const overrides = runOverrides();
+
+      const refused = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
+      assert.equal(refused.code, 1, "an unknown start outcome is not a clean step");
+      assert.match(refused.err, /it may still be running/, refused.err);
+
+      const events = readEvents(stateDir, TASK).events.filter(
+        (event) => event.data?.stage === "implement",
+      );
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["stage_starting", "stage_start_unknown"],
+        "the unknown start is opened and recorded, with no stage_failed and no decision",
+      );
+      assert.equal(events[1].data.runtime, "orca");
+      assert.match(events[1].data.observation.startError, /may still be running/);
+      assert.equal(
+        readEvents(stateDir, TASK).events.some(
+          (event) => event.type === "decision" || event.type === "stage_failed",
+        ),
+        false,
+        "an unknown outcome is never diagnosed as a failure",
+      );
+
+      const blocked = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
+      assert.equal(blocked.code, 0, blocked.err);
+      assert.match(blocked.out, /yukl run: blocked at implement \(R-NEEDS-HUMAN\)/);
+      assert.doesNotMatch(blocked.out, /advanced/);
+
+      const calls = readCalls(logPath);
+      const starts = calls.filter((argv) => argv[1] === "worker-start");
+      assert.equal(starts.length, 1, "the blocked run never starts a second worker");
+      const stops = calls.filter((argv) => argv[1] === "worker-stop");
+      assert.equal(stops.length, 1, "the adapter tries the stop exactly once");
+      assert.equal(stops[0][stops[0].indexOf("--dispatch") + 1], "ctx_fake_residual");
+    });
+  });
+});

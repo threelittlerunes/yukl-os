@@ -605,6 +605,30 @@ function throwingRuntime(message) {
   return runtime;
 }
 
+/**
+ * A runtime whose `start` throws the Orca adapter's unknown-outcome error: the
+ * failed start named a residual worker whose `worker-stop` could not be proven
+ * to have stopped it, so the thrown value carries `startOutcomeUnknown`.
+ */
+function unknownStartRuntime() {
+  const runtime = {
+    name: "orca",
+    startCount: 0,
+    start() {
+      runtime.startCount += 1;
+      const error = new Error(
+        "orca worker-start failed (exit 1); worker-stop failed for residual worker ctx_fake_residual (worker-stop exit 1); it may still be running: start refused",
+      );
+      error.startOutcomeUnknown = true;
+      throw error;
+    },
+    status: () => "unverifiable",
+    result: () => null,
+    stop() {},
+  };
+  return runtime;
+}
+
 test("a throwing start is recorded as stage_failed and diagnosed", async () => {
   await withTempDir(async (dir) => {
     const taskId = "task-start-throws";
@@ -664,6 +688,60 @@ test("a throwing start is recorded as stage_failed and diagnosed", async () => {
     assert.equal(runtime.startCount, 1, "the loop never retries a throwing start on its own");
     const decision = readEvents(dir, taskId).events.find((e) => e.type === "decision");
     assert.equal(decision.decision.kind, "escalate", "the escalation is the recorded diagnosis");
+  });
+});
+
+test("a start whose residual worker could not be stopped blocks the next step instead of retrying", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-unknown-stop";
+    const runtime = unknownStartRuntime();
+    const diagnosed = [];
+    const deps = makeDeps(dir, {
+      runtime: () => runtime,
+      decide: (observation) => {
+        diagnosed.push(observation);
+        return { kind: "retry", rule: "R-DIAGNOSE" };
+      },
+    });
+
+    // The adapter could not prove the residual worker stopped, so the start's
+    // outcome is unknown: the error is rethrown and recorded, but it is not
+    // diagnosed, and no stage_failed closes the stage_starting.
+    await assert.rejects(step({ taskId, deps }), /it may still be running/);
+    assert.equal(runtime.startCount, 1, "the failed start is attempted once");
+    assert.equal(diagnosed.length, 0, "an unknown outcome is never diagnosed");
+
+    const events = readEvents(dir, taskId).events;
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["stage_starting", "stage_start_unknown"],
+      "the unknown start is opened and recorded, with no stage_failed and no decision",
+    );
+    assert.equal(events[1].actor, "engine");
+    assert.equal(events[1].data.stage, "intent");
+    assert.equal(events[1].data.runtime, "orca");
+    assert.deepEqual(Object.keys(events[1].data.observation), ["startError"]);
+    assert.match(events[1].data.observation.startError, /it may still be running/);
+
+    // The unknown start is not closed, so the next step blocks for a human and
+    // starts nothing: a retry would race the worker that may still be live.
+    const outcome = await step({ taskId, deps });
+    assert.equal(outcome.status, "blocked");
+    assert.equal(outcome.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(outcome.stage, "intent");
+    assert.equal(runtime.startCount, 1, "the next step starts no second worker");
+    assert.equal(diagnosed.length, 0, "the block still records no diagnosis");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((event) => event.type),
+      ["stage_starting", "stage_start_unknown"],
+      "the block appends nothing",
+    );
+
+    // And the loop that would carry the retry out blocks in turn.
+    const result = await runUntilBlocked({ taskId, deps, maxSteps: 64 });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(runtime.startCount, 1, "the loop stops before the next agent start");
   });
 });
 
@@ -729,6 +807,59 @@ test("a human_decision naming the stage clears the unknown start so the next ste
       readEvents(dir, taskId).events.map((e) => e.type),
       ["stage_starting", "human_decision", "stage_starting", "stage_started"],
       "the cleared start is closed and the new one is opened and recorded",
+    );
+  });
+});
+
+test("a human_decision whose data.stage names the stage clears the unknown start", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-human-stage";
+    // The other shape the engine accepts: the decision persists the stage it
+    // resolves in `data.stage` (the field a stage event carries) instead of the
+    // override's `data.to`. Both must close the unknown start; this guards the
+    // `data.stage` branch of `humanDecisionFor`.
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "orca" },
+    });
+    appendEvent(dir, taskId, {
+      type: "stage_start_unknown",
+      actor: "engine",
+      data: {
+        stage: "intent",
+        runtime: "orca",
+        observation: { startError: "worker-stop failed for residual worker ctx_1" },
+      },
+    });
+    appendEvent(dir, taskId, {
+      type: "human_decision",
+      actor: "human:alice",
+      data: {
+        decision: "override",
+        by: "alice",
+        reason: "the residual worker was stopped by hand",
+        appliedAtSeq: 1,
+        stage: "intent",
+      },
+    });
+
+    const runtime = countingRuntime();
+    const outcome = await step({ taskId, deps: makeDeps(dir, { runtime: () => runtime }) });
+    assert.equal(outcome.status, "started");
+    assert.equal(outcome.stage, "intent");
+    assert.equal(outcome.handle, "handle-intent");
+    assert.equal(runtime.startCount, 1, "the stage starts exactly once after the decision");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((e) => e.type),
+      [
+        "stage_starting",
+        "stage_start_unknown",
+        "human_decision",
+        "stage_starting",
+        "stage_started",
+      ],
+      "the decision closes the unknown start and the new start is recorded",
     );
   });
 });

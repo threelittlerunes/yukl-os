@@ -53,17 +53,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `yukl decide override --to <stage>`. A `start` that throws is recorded as a
   `stage_failed` carrying `observation.startError`, diagnosed like any other
   failure with its `decision` appended, and then rethrown, so the refusal is in
-  the log and `yukl run` still exits 1 with the runtime's error message. The
-  run's agent-start limit still counts `stage_started` events only, so an
-  unknown or refused start consumes nothing (ha-08).
+  the log and `yukl run` still exits 1 with the runtime's error message. One
+  throw is the exception: a value carrying `startOutcomeUnknown` - the Orca
+  adapter's failed start whose residual worker could not be proven stopped - is
+  recorded as a `stage_start_unknown` carrying `observation.startError`, with no
+  diagnosis and no `decision`, and rethrown; nothing closes the
+  `stage_starting`, so the next step blocks with `R-NEEDS-HUMAN` exactly as for
+  a crash and never retries beside a worker that may still be live. The run's
+  agent-start limit still counts `stage_started` events only, so an
+  unknown or refused start consumes nothing (ha-08). The exception and the new
+  event are guarded by `a start whose residual worker could not be stopped
+  blocks the next step instead of retrying` and `a human_decision whose
+  data.stage names the stage clears the unknown start`.
 - The Orca adapter stops the worker a failed `worker-start` names. A failed or
   `outcome_unknown` call exits 1 and may already have created the worker,
   naming it as `result.dispatchId` or among the `residualResources` it reports:
   `start` now calls `worker-stop` for that id before throwing, and the error
   names the id and the `residualResources`; a reply that names no worker stops
-  nothing. A start with no spec, no configured agent or no derivable worker name
-  is refused before any Orca command runs, so an empty `--spec`, `--name` or
-  `--agent` value is never passed (ha-08).
+  nothing. That stop is checked and not assumed: only a `worker-stop` that exits
+  0 with a reply that parses as a JSON object which does not say `ok: false` is
+  reported as "stopped residual worker <id>", while a spawn error, a non-zero
+  exit, `ok: false` or an unparseable reply throws an error that says the
+  residual worker "may still be running", names the `residualResources` and the
+  start detail, and sets `startOutcomeUnknown = true` - which the engine turns
+  into the `stage_start_unknown` block above instead of a retry, so a failed
+  start is never reported as stopped and never retried beside a worker that may
+  still be live. A start with no spec, no configured agent or no derivable
+  worker name is refused before any Orca command runs, so an empty `--spec`,
+  `--name` or `--agent` value is never passed; the checked stop is guarded by
+  `a failed worker-stop leaves the start outcome unknown and never claims the
+  worker stopped` and, over the real composition root, `a failed worker-stop
+  over the real adapter blocks the next run instead of starting a second
+  worker` (ha-08).
 - The Orca runtime adapter now speaks the shapes the lifecycle engine
   enforces, so `yukl run` can drive an Orca worker end to end: `start` returns
   the Orca dispatch id as a non-empty string handle (the engine records it in
