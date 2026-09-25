@@ -119,7 +119,10 @@ function humanDecisionFor(event, stage) {
  * returns that refusal instead of recording it again. A `stage_starting` with
  * no following `stage_started`, `stage_failed`, `stage_done` or matching
  * `human_decision` is a start whose outcome is unknown - a crash between the
- * runtime call and the record - and is reported as `starting`.
+ * runtime call and the record - and is reported as `starting`. A
+ * `stage_start_unknown` records that same state when `runtime.start` threw with
+ * an unknown outcome (see `startStage`): it neither closes nor clears the
+ * start, so `starting` stays true until a matching `human_decision`.
  */
 function openStage(events, stage) {
   const open = { handle: null, enforcement: null, starting: false };
@@ -330,6 +333,15 @@ function errorMessage(error) {
  * rethrown afterwards - the failure is both in the log and still loud at the
  * caller, and the recorded `stage_failed` closes the start, so the next step is
  * not mistaken for an unknown outcome.
+ *
+ * One throw is the exception: a value carrying `startOutcomeUnknown === true`
+ * - an adapter's failed start whose residual worker could not be proven
+ * stopped - has an outcome exactly as unknown as a crash between the call and
+ * the record. It is recorded as a `stage_start_unknown` carrying the error
+ * message, with no diagnosis, no `stage_failed` and no `decision`, and then
+ * rethrown. Nothing closes the `stage_starting`, so the next step blocks with
+ * R-NEEDS-HUMAN and starts nothing, which is what keeps a retry from racing a
+ * worker that may still be live.
  */
 async function startStage({ taskId, deps, state, log, stage, runtime }) {
   const dispatch = dispatchFor(deps, stage, taskId);
@@ -349,6 +361,14 @@ async function startStage({ taskId, deps, state, log, stage, runtime }) {
       env: dispatch.env,
     });
   } catch (error) {
+    if (error !== null && typeof error === "object" && error.startOutcomeUnknown === true) {
+      append(deps, taskId, {
+        type: "stage_start_unknown",
+        actor: ENGINE,
+        data: { stage, runtime: runtimeId, observation: { startError: errorMessage(error) } },
+      });
+      throw error;
+    }
     await failStage({
       taskId,
       deps,
@@ -620,7 +640,10 @@ function assertDeps(deps) {
  * `stage_started` record - blocks the step with R-NEEDS-HUMAN, so an unknown
  * start is never repeated; a human decision that names the stage closes it. A
  * runtime whose `start` throws is recorded as a `stage_failed` and diagnosed,
- * and the error is rethrown to the caller.
+ * and the error is rethrown to the caller - unless the thrown value carries
+ * `startOutcomeUnknown`, which records a `stage_start_unknown` instead and
+ * leaves the start open so the next step blocks rather than races a worker that
+ * may still be live.
  * An agent stage that finished is passed through the injected path enforcement
  * before it advances, and an `integrate` stage is merged through the injected
  * VCS with the current log head as the run head.

@@ -280,6 +280,79 @@ test("a failed worker-start that names a dispatch stops it before throwing", asy
   }
 });
 
+test("a failed worker-stop leaves the start outcome unknown and never claims the worker stopped", async () => {
+  // worker-start fails and names the worker it created, but worker-stop cannot
+  // prove it stopped: each shape must throw an error that says the worker may
+  // still be running and carries `startOutcomeUnknown`, never "stopped".
+  const stopFailures = [
+    {
+      name: "worker-stop exits non-zero",
+      reply: { exitCode: 3, stderr: "no such worker" },
+      reason: /worker-stop exit 3/,
+    },
+    {
+      name: "worker-stop replies ok: false",
+      reply: { json: { ok: false, result: { error: "cannot stop" } } },
+      reason: /worker-stop replied ok: false/,
+    },
+    {
+      name: "worker-stop replies unparseable output",
+      reply: { stdout: "stop: not json\n" },
+      reason: /unparseable worker-stop reply/,
+    },
+  ];
+
+  for (const stopCase of stopFailures) {
+    await withTempDir(async (dir) => {
+      await withFake(
+        dir,
+        {
+          "worker-start": {
+            exitCode: 1,
+            json: {
+              ok: false,
+              result: {
+                dispatchId: "ctx_fake_residual",
+                stage: "starting",
+                residualResources: [{ kind: "worker", dispatchId: "ctx_fake_residual" }],
+              },
+            },
+          },
+          "worker-stop": stopCase.reply,
+        },
+        async (runtime, { logPath }) => {
+          assert.throws(
+            () => runtime.start({ taskId: "t", spec: "s" }),
+            (err) => {
+              assert.equal(
+                err.startOutcomeUnknown,
+                true,
+                `${stopCase.name}: outcome stays unknown`,
+              );
+              assert.match(err.message, /ctx_fake_residual/, stopCase.name);
+              assert.match(err.message, stopCase.reason, stopCase.name);
+              assert.match(err.message, /may still be running/, stopCase.name);
+              assert.match(err.message, /residualResources/, stopCase.name);
+              assert.equal(
+                err.message.includes("stopped residual worker"),
+                false,
+                `${stopCase.name}: a failed stop is never reported as a stopped worker`,
+              );
+              return true;
+            },
+            `${stopCase.name} must throw`,
+          );
+
+          const calls = readCalls(logPath);
+          const stops = calls.filter((argv) => argv[1] === "worker-stop");
+          assert.equal(stops.length, 1, `${stopCase.name}: exactly one worker-stop is called`);
+          assert.equal(stops[0][stops[0].indexOf("--dispatch") + 1], "ctx_fake_residual");
+        },
+      );
+    });
+  }
+});
+
 test("a failed worker-start with no dispatch id stops nothing", async () => {
   await withTempDir(async (dir) => {
     await withFake(
