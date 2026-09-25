@@ -215,6 +215,156 @@ test("an ok:false worker-start envelope fails even with exit 0", async () => {
   });
 });
 
+test("a failed worker-start that names a dispatch stops it before throwing", async () => {
+  const scenarios = [
+    {
+      name: "result.dispatchId names the worker",
+      reply: {
+        exitCode: 1,
+        json: {
+          ok: false,
+          result: {
+            dispatchId: "ctx_fake_residual",
+            stage: "starting",
+            residualResources: [{ kind: "worker", dispatchId: "ctx_fake_residual" }],
+          },
+        },
+      },
+      id: "ctx_fake_residual",
+    },
+    {
+      name: "only a residualResources entry names the worker",
+      reply: {
+        exitCode: 1,
+        json: {
+          ok: false,
+          result: {
+            stage: "starting",
+            residualResources: [{ kind: "worker", id: "ctx_fake_left" }],
+          },
+        },
+      },
+      id: "ctx_fake_left",
+    },
+  ];
+
+  for (const scenarioCase of scenarios) {
+    await withTempDir(async (dir) => {
+      await withFake(
+        dir,
+        { "worker-start": scenarioCase.reply, "worker-stop": { json: { ok: true, result: {} } } },
+        async (runtime, { logPath }) => {
+          assert.throws(
+            () => runtime.start({ taskId: "t", spec: "s" }),
+            (err) => {
+              assert.match(err.message, /worker-start failed \(exit 1\)/);
+              assert.match(err.message, new RegExp(scenarioCase.id));
+              assert.match(err.message, /residualResources/);
+              return true;
+            },
+            `${scenarioCase.name} must throw`,
+          );
+          const calls = readCalls(logPath);
+          const stops = calls.filter((argv) => argv[1] === "worker-stop");
+          assert.equal(stops.length, 1, `${scenarioCase.name}: exactly one worker-stop`);
+          assert.deepEqual(stops[0], [
+            "orchestration",
+            "worker-stop",
+            "--dispatch",
+            scenarioCase.id,
+            "--json",
+          ]);
+        },
+      );
+    });
+  }
+});
+
+test("a failed worker-start with no dispatch id stops nothing", async () => {
+  await withTempDir(async (dir) => {
+    await withFake(
+      dir,
+      {
+        "worker-start": {
+          exitCode: 1,
+          stderr: "no Orca runtime",
+          json: { ok: false, result: { stage: "setup", residualResources: [] } },
+        },
+      },
+      async (runtime, { logPath }) => {
+        assert.throws(
+          () => runtime.start({ taskId: "t", spec: "s" }),
+          /worker-start failed \(exit 1\)/,
+        );
+        const calls = readCalls(logPath);
+        assert.equal(calls.length, 1, "only the failed worker-start is attempted");
+        assert.equal(
+          calls.some((argv) => argv[1] === "worker-stop"),
+          false,
+          "a reply that names no worker stops nothing",
+        );
+      },
+    );
+  });
+});
+
+test("a start without a spec or agent throws and calls no Orca command", async () => {
+  await withTempDir(async (dir) => {
+    const scenarioPath = join(dir, "scenario.json");
+    const logPath = join(dir, "calls.log");
+    writeFileSync(
+      scenarioPath,
+      JSON.stringify({
+        "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_1" } } },
+      }),
+    );
+
+    const savedLog = process.env.FAKE_ORCA_LOG;
+    const savedScenario = process.env.FAKE_ORCA_SCENARIO;
+    process.env.FAKE_ORCA_LOG = logPath;
+    process.env.FAKE_ORCA_SCENARIO = scenarioPath;
+    try {
+      const configured = createOrcaRuntime({
+        orca: [process.execPath, FAKE],
+        agent: "omp",
+        name: "test-worker",
+      });
+      for (const spec of [null, undefined, "", "   "]) {
+        assert.throws(
+          () => configured.start({ taskId: "t", spec }),
+          /non-empty --spec/,
+          `spec ${JSON.stringify(spec)} must be refused`,
+        );
+      }
+
+      for (const agent of [null, undefined, "", "   "]) {
+        const runtime = createOrcaRuntime({
+          orca: [process.execPath, FAKE],
+          agent,
+          name: "test-worker",
+        });
+        assert.throws(
+          () => runtime.start({ taskId: "t", spec: "s" }),
+          /non-empty agent/,
+          `agent ${JSON.stringify(agent)} must be refused`,
+        );
+      }
+
+      const unnamed = createOrcaRuntime({ orca: [process.execPath, FAKE], agent: "omp" });
+      assert.throws(
+        () => unnamed.start({ spec: "s" }),
+        /worker name is required/,
+        "a start with no name, taskId or stage must be refused",
+      );
+
+      assert.deepEqual(readCalls(logPath), [], "no Orca command runs for a refused start");
+    } finally {
+      restoreEnv("FAKE_ORCA_LOG", savedLog);
+      restoreEnv("FAKE_ORCA_SCENARIO", savedScenario);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // status mapping
 // ---------------------------------------------------------------------------
