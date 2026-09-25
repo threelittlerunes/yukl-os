@@ -45,6 +45,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository exits 0 and publishes nothing (v3-w2-vcs-sync).
 
 ### Changed
+- The engine records every start before it makes it, and never repeats a start
+  whose outcome is unknown: a `stage_starting` event is appended before
+  `runtime.start`, and a later step that finds it unclosed - no `stage_started`,
+  `stage_failed`, `stage_done` or matching `human_decision` after it - blocks
+  with `R-NEEDS-HUMAN` and starts nothing, until a human names the stage with
+  `yukl decide override --to <stage>`. A `start` that throws is recorded as a
+  `stage_failed` carrying `observation.startError`, diagnosed like any other
+  failure with its `decision` appended, and then rethrown, so the refusal is in
+  the log and `yukl run` still exits 1 with the runtime's error message. The
+  run's agent-start limit still counts `stage_started` events only, so an
+  unknown or refused start consumes nothing (ha-08).
+- The Orca adapter stops the worker a failed `worker-start` names. A failed or
+  `outcome_unknown` call exits 1 and may already have created the worker,
+  naming it as `result.dispatchId` or among the `residualResources` it reports:
+  `start` now calls `worker-stop` for that id before throwing, and the error
+  names the id and the `residualResources`; a reply that names no worker stops
+  nothing. A start with no spec, no configured agent or no derivable worker name
+  is refused before any Orca command runs, so an empty `--spec`, `--name` or
+  `--agent` value is never passed (ha-08).
 - The Orca runtime adapter now speaks the shapes the lifecycle engine
   enforces, so `yukl run` can drive an Orca worker end to end: `start` returns
   the Orca dispatch id as a non-empty string handle (the engine records it in
@@ -70,7 +89,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is accepted and also falls back to the repository's default base - the
   worktree was created from `refs/remotes/origin/main` - but that empty-string
   path is untested by Orca's help, so the adapter omits the pair
-  (`docs/YUKL_ARCHITECTURE.md` section 4.16) (ha-06).
+  (`docs/YUKL_ARCHITECTURE.md` section 4.17) (ha-06).
 - Every drafting runtime routes to `omp`: `orca.yaml` `agents.drafter.agent`, the
   `expert-power-drafter` stage in `flow.config.json` and
   `yukl.config.json` `lifecycle.runtimes.implement.agent` (audit and review stay
@@ -86,7 +105,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while either limit is unset (v3-unattended).
 - The unattended refusal message names run limits, not budgets, and
   `docs/YUKL_ARCHITECTURE.md` sections 4.2, 4.5 and 4.7 describe the enforced
-  limits while new sections 4.13 and 4.14 document the scheduler and the lock
+  limits while new sections 4.14 and 4.15 document the scheduler and the lock
   broker (v3-unattended).
 - `yukl init`: installs the harness into a target repository on a feature
   branch without overwriting anything it already has. It refuses (exit 1, no
@@ -261,7 +280,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serialised, so two acquirers colliding on a crashed reclaimer's guard can in
   principle both take it; the same-owner re-check narrows that window but does
   not close it. The module header of `scripts/lifecycle/locks.js` and section
-  4.17 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
+  4.18 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
   (v3-unattended).
 - The unattended-loop tests fail fast instead of hanging when a run limit stops
   firing: their fake sleep and fake runtime are bounded, so a loop with no exit

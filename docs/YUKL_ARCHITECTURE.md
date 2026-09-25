@@ -366,7 +366,11 @@ read, which is a local preview rather than a trust boundary. In a Jujutsu
 workspace (section 4.15) every agent start first publishes the working copy as
 the Git branch `yukl-wc`, and the worker branches from that ref even when
 `--base` is given, because `--base` governs what the run reads - the config, the
-policy, path enforcement and the merge target - not where the worker starts.
+policy, path enforcement and the merge target - not where the worker starts. A
+start is recorded before it is made: the run never repeats a start whose outcome
+is unknown - the step blocks with `R-NEEDS-HUMAN` (section 4.8) - and a runtime
+whose `start` throws is recorded as a `stage_failed` and fails the run with the
+original error.
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
@@ -441,11 +445,12 @@ is merely running cannot keep it alive past the limit; and it counts the agent
 starts it has made itself (the `stage_started` events it appended, excluding the
 `integrate` merge marker) against `maxAgentStartsPerRun` at the moment an agent
 would start, so a run at its limit still waits for the agent it has already
-dispatched instead of abandoning it. Either breach appends an `enforcement`
-event carrying `rule: R-RUN-LIMIT` and the breached limit to the task's log and
-stops the run, which exits 1; nothing is killed and nothing is penalised beyond
-that stop, and because the count is run-scoped, a later run of the same task
-starts with the limit unspent.
+dispatched instead of abandoning it. A `stage_starting` - a start whose recorded
+outcome is unknown - is not one of them (section 4.8). Either breach appends an
+`enforcement` event carrying `rule: R-RUN-LIMIT` and the breached limit to the
+task's log and stops the run, which exits 1; nothing is killed and nothing is
+penalised beyond that stop, and because the count is run-scoped, a later run of
+the same task starts with the limit unspent.
 
 The limits bound every run, attended as well as unattended: `yukl run` hands the
 policy's two values to the loop whatever its mode, the wall-clock check and the
@@ -455,7 +460,47 @@ changes only what the loop does between steps - it waits for a running stage
 instead of stopping on it - and it is the only mode that is refused while a
 limit is unset.
 
-### 4.8 The event log
+### 4.8 Start safety
+<!-- status: implemented tests=tests/lifecycle-engine.test.js#a start with unknown outcome blocks with R-NEEDS-HUMAN and starts nothing -->
+
+A start is recorded before it is made and its refusal is recorded after it, so a
+throwing or interrupted start cannot leave a live worker behind an unrecorded
+handle.
+
+The engine appends a `stage_starting` event (`stage`, `runtime`) before it calls
+`runtime.start`, and the `stage_started` event carrying the handle after the
+call returns. A crash between the two therefore leaves a `stage_starting` as the
+last event for that stage. On a later step, a `stage_starting` with no following
+`stage_started`, `stage_failed`, `stage_done` or matching `human_decision` is a
+start whose outcome is unknown - the engine cannot know whether the runtime
+created a worker - so the step returns `status: "blocked"` with
+`rule: R-NEEDS-HUMAN` and starts nothing. `runUntilBlocked` stops on that block
+whatever its mode, so the start is never repeated blindly.
+
+A `runtime.start` that throws is recorded and diagnosed, not swallowed. The
+engine appends a `stage_failed` carrying `observation.startError` (the thrown
+message), runs the same diagnosis as for any other failure, appends its
+`decision` event, and then rethrows the original error, so `yukl run` still
+exits 1 with the runtime's message. Because that `stage_failed` closes the
+`stage_starting`, a later step is not mistaken for an unknown outcome: it starts
+the stage again if and only if the recorded diagnosis chose retry. This covers a
+runtime that refuses before any worker exists as well as the Orca adapter's
+failed `worker-start`, which stops the worker it created first (section 4.17).
+
+A human decision that names the stage clears the unknown start - the `data.to`
+that `yukl decide override --to <stage>` persists, or a `data.stage` - and the
+next step then starts the stage once. The other decisions cannot clear it:
+`approve`, `pause` and `resume` persist no stage, and `stop` names the terminal
+`stopped`, so an operator who resolves an unknown start uses
+`yukl decide override --to <stage>` or stops the task. Nothing else is cleared:
+an open handle stays polled, so a decision naming a stage never makes the engine
+start a second worker beside a live one.
+
+A `stage_starting` is not an agent start. The run's start limit still counts
+only the `stage_started` events the run appended (section 4.7), so an unknown or
+refused start consumes nothing.
+
+### 4.9 The event log
 <!-- status: implemented tests=tests/lifecycle-events.test.js#editing any byte of an earlier line makes verifyChain fail naming that line -->
 
 Each task's state is an append-only JSONL log at
@@ -469,7 +514,7 @@ can leave at most a torn final line; `readEvents` reports that partial tail
 separately and ignores it for folding and verification, while a break earlier
 in the file is fatal. `appendEvent` fsyncs each line before returning.
 
-### 4.9 The run head
+### 4.10 The run head
 <!-- status: implemented tests=tests/acceptance-a.test.js#AC1: the merged lifecycle anchors every event to the base and commits the run head -->
 
 The event log is not committed as a file. Instead, at the `integrate` stage the
@@ -481,23 +526,25 @@ and checks that the log still contains a line hashing to it. A log that is
 internally consistent but no longer contains the committed head fails that
 check even though its chain verifies.
 
-### 4.10 The runtime adapter interface
+### 4.11 The runtime adapter interface
 <!-- status: implemented tests=tests/adapter-orca.test.js#the adapter implements the runtime interface -->
 
-A runtime adapter implements `start`, `status`, `result` and `stop`. The
+A runtime adapter implements `start`, `status`, `result` and `stop`. A `start`
+returns the runtime's handle and may throw, in which case the engine records the
+refusal as a `stage_failed` and rethrows it (section 4.8). The
 bundled adapters include `fake` (a scripted test double), `orca` (drives the
 Orca CLI through argument arrays) and `vcs-git-local` (merges through local
 git); `vcs-github` merges through the GitHub CLI, and each adapter file has its
 own test suite. The bundled Orca adapter's handle, result and base-branch
-shapes are specified in section 4.16.
+shapes are specified in section 4.17.
 
-### 4.11 The lifecycle directory stays adapter-neutral
+### 4.12 The lifecycle directory stays adapter-neutral
 <!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
 
 The lifecycle directory imports no adapter directly, so it stays free of any
 single agent's vocabulary and of hard imports of a particular adapter.
 
-### 4.12 The lifecycle block
+### 4.13 The lifecycle block
 <!-- status: implemented tests=tests/command-run.test.js#lifecycleViolations rejects an adapter with no file and a stateDir outside the root -->
 
 The `lifecycle` block of `yukl.config.json` names the adapter and agent for each
@@ -506,7 +553,7 @@ named adapter has a matching file under `scripts/adapters/` and that the state
 directory resolves inside the repository; `yukl run` reads the same checks back
 through `lifecycleViolations`.
 
-### 4.13 The scheduler
+### 4.14 The scheduler
 <!-- status: implemented tests=tests/command-schedule.test.js#schedule runs a wave concurrently and starts the next wave only after it settles -->
 
 `yukl schedule <task_id>... [--cwd <dir>] [--base <git-ref>]
@@ -522,7 +569,7 @@ the order given, so a task joins the first wave it fits and a wave runs
 concurrently while the next one waits. A task whose intent is missing or
 malformed has an unknown scope and overlaps everything, which serialises it
 rather than letting it race. Each task takes its id as an advisory lock
-(section 4.14) before its worktree is prepared and releases it afterwards, and a
+(section 4.15) before its worktree is prepared and releases it afterwards, and a
 task whose lock is held by a live owner is reported and skipped instead of run.
 The exit code is 0 when every task exited 0 and 1 when any failed or was
 refused. There is no queue file and no daemon: the positional task ids are the
@@ -538,7 +585,7 @@ trust boundary: the scheduler then plans the waves from whatever the checkout
 says. `--base` is also passed on to every task's `yukl run`, so the same ref
 governs what each task is allowed to do once it starts.
 
-### 4.14 The advisory lock broker
+### 4.15 The advisory lock broker
 <!-- status: implemented tests=tests/lifecycle-locks.test.js#a lock whose owner process is gone is reclaimed, not respected -->
 
 `scripts/lifecycle/locks.js` guards a shared resource - a dependency install, a
@@ -571,7 +618,7 @@ the same record is never removed. The guard records its own owner like any lock,
 so a reclaimer that crashed mid-reclaim leaves a stale guard that the next
 acquirer reclaims in turn rather than a permanent wedge.
 
-### 4.15 Working-copy publication: `yukl vcs-sync`
+### 4.16 Working-copy publication: `yukl vcs-sync`
 <!-- status: implemented tests=tests/command-vcs-sync.test.js#syncJjWorkingCopy publishes an undescribed working copy and points the Git branch at it -->
 
 `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
@@ -601,7 +648,11 @@ already points at `@`, where the sync merely republishes what Git is missing;
 everything else is a ref the user owns, and it is refused instead of rewritten.
 
 It fails closed - exit 1, nothing published, and the dispatch it guards is
-refused - rather than publishing a state it cannot vouch for:
+refused - rather than publishing a state it cannot vouch for. A sync that
+refuses during `yukl run` throws from inside the guarded `start`, so the engine
+records the refusal as `stage_starting` plus `stage_failed` carrying the sync's
+message and the run then exits 1 with that message (section 4.8); the worker is
+still never started:
 
 - **A workspace that cannot be read.** A `.jj` entry at or above the working
   directory (the walk stops at the filesystem root) means a workspace is
@@ -634,11 +685,11 @@ not Git-branch-shaped, all refused before jj is spawned). `--json` prints the
 result object on one line instead of the human summary, so a calling hook can
 read it.
 
-### 4.16 The Orca adapter: handle, result and base branch
+### 4.17 The Orca adapter: handle, result and base branch
 <!-- status: implemented tests=tests/engine-orca.test.js#yukl run --once drives a real-adapter start to an advanced stage -->
 
 The bundled Orca adapter is the runtime that the engine drives through the
-interface of section 4.10, and three of its shapes are load-bearing.
+interface of section 4.11, and four of its behaviours are load-bearing.
 
 **The handle is the dispatch id string.** `start` returns the Orca dispatch id
 itself - a non-empty string - and `status`, `result` and `stop` accept that
@@ -665,7 +716,26 @@ back to the default - the worktree was created from `refs/remotes/origin/main` -
 but that empty-string behaviour is undocumented, so the adapter does not depend
 on it.
 
-The regression guard is a pair of integration tests over the real composition
+**A failed start is stopped and named.** `worker-start` exits 0 only for a ready
+worker; a failed or `outcome_unknown` call exits 1 and may already have created
+the worker, naming it either as `result.dispatchId` or among the
+`residualResources` it reports. When the reply names such an id, `start` calls
+`worker-stop` on it before throwing, and the error names the id and the
+`residualResources`, so a failed start cannot leave a live worker behind an
+unrecorded handle; the engine records the refusal as `stage_starting` plus
+`stage_failed` and the run exits 1 (section 4.8). A reply that names no worker
+stops nothing, because stopping an id the adapter invented would be worse than
+leaving Orca to clean up. `tests/adapter-orca.test.js` guards both cases - `a
+failed worker-start that names a dispatch stops it before throwing` (which also
+covers a reply that names the worker only inside `residualResources`) and `a
+failed worker-start with no dispatch id stops nothing`.
+
+The start is also refused before any Orca command when it has no spec, no
+configured agent or no derivable worker name (a `name`, a `taskId` or a
+`stage`), so an empty `--spec`, `--name` or `--agent` value is never passed:
+`a start without a spec or agent throws and calls no Orca command`.
+
+The regression guards are integration tests over the real composition
 root: `yukl run --once` in a temporary repository whose lifecycle block routes
 `implement` to the Orca adapter. The first - `yukl run --once drives a
 real-adapter start to an advanced stage` - starts exactly one worker, records
@@ -677,9 +747,14 @@ settled outcome is refused, not advanced` - reports an `exited` worker whose
 outcome is neither `succeeded` nor `failed`, and asserts the poll becomes a
 refusal instead: the step prints `failed at implement`, no `stage_done` closes
 `implement`, exactly one `stage_failed` records the `runtimeRefused`
-observation, and no second worker is started.
+observation, and no second worker is started. A third - `a failed worker-start
+over the real adapter stops the named dispatch and records stage_failed` -
+drives a failed `worker-start` that names a dispatch and asserts the whole
+chain: the adapter stops that dispatch, the run exits 1 with the adapter's
+message, and the log holds `stage_starting`, `stage_failed` carrying
+`observation.startError`, and the diagnosis's `decision`.
 
-### 4.17 Known limits
+### 4.18 Known limits
 <!-- status: background -->
 
 Four limits bound what the machinery above can prove, and they are worth
@@ -704,7 +779,7 @@ stating plainly.
    without any committed head contradicting them.
 4. **Reclaiming a stale reclaim guard is not serialised.** The broker's
    stale-lock reclaim runs under an exclusive `<name>.lock.reclaim` guard
-   (section 4.14), but taking that guard when it is itself stale - a reclaimer
+   (section 4.15), but taking that guard when it is itself stale - a reclaimer
    that crashed mid-reclaim - is not guarded in turn. Two acquirers that
    collide on such a guard can in principle both take it, both remove the stale
    lock, and one of them delete the lock the other has just created. The

@@ -99,25 +99,51 @@ function isTerminal(stage, stages) {
 }
 
 /**
- * The open start for `stage`, if any: the handle of a runtime still running and
- * any enforcement already recorded against it. A later `stage_done` or
- * `stage_failed` closes the start, so a retry begins with no handle and no
- * recorded enforcement. An `enforcement` event marks the open handle as already
- * refused, so a later step returns that refusal instead of recording it again.
+ * True when a persisted `human_decision` names `stage`: `data.to` is what
+ * `yukl decide override --to <stage>` writes, and `data.stage` is accepted too.
+ * The other decisions carry no stage - `stop` names the terminal `stopped`, and
+ * `pause`, `resume` and `approve` name none at all - so they cannot close an
+ * unknown start for a named stage.
+ */
+function humanDecisionFor(event, stage) {
+  const data = event.data ?? {};
+  return data.stage === stage || data.to === stage;
+}
+
+/**
+ * The open start for `stage`, if any: the handle of a runtime still running,
+ * any enforcement already recorded against it, and whether a start was begun
+ * without a recorded outcome. A later `stage_done` or `stage_failed` closes the
+ * start, so a retry begins with no handle and no recorded enforcement, and an
+ * `enforcement` event marks the open handle as already refused, so a later step
+ * returns that refusal instead of recording it again. A `stage_starting` with
+ * no following `stage_started`, `stage_failed`, `stage_done` or matching
+ * `human_decision` is a start whose outcome is unknown - a crash between the
+ * runtime call and the record - and is reported as `starting`.
  */
 function openStage(events, stage) {
-  const open = { handle: null, enforcement: null };
+  const open = { handle: null, enforcement: null, starting: false };
   for (const event of events) {
     if (event === null || typeof event !== "object") continue;
+    if (event.type === "human_decision") {
+      if (humanDecisionFor(event, stage)) open.starting = false;
+      continue;
+    }
     if (event.data?.stage !== stage) continue;
-    if (event.type === "stage_started") {
+    if (event.type === "stage_starting") {
+      open.handle = null;
+      open.enforcement = null;
+      open.starting = true;
+    } else if (event.type === "stage_started") {
       open.handle = event.data?.handle ?? null;
       open.enforcement = null;
+      open.starting = false;
     } else if (event.type === "enforcement") {
       open.enforcement = { rule: event.data?.rule, violations: event.data?.violations };
     } else if (event.type === "stage_done" || event.type === "stage_failed") {
       open.handle = null;
       open.enforcement = null;
+      open.starting = false;
     }
   }
   return open;
@@ -286,22 +312,59 @@ async function completeAgentStage({ taskId, deps, state, stage, runtime, result 
   return completeStage({ taskId, deps, state, stage, anchor: anchored.anchor, actor });
 }
 
-/** Start an agent stage's runtime and record the handle before doing anything
- * else, so a crash after the start is recoverable by polling that handle. */
-async function startStage({ taskId, deps, stage, runtime }) {
+/** The message of a thrown value, so a non-Error throw still reads as text. */
+function errorMessage(error) {
+  if (error !== null && typeof error === "object" && typeof error.message === "string") {
+    return error.message;
+  }
+  return String(error);
+}
+
+/**
+ * Start an agent stage's runtime, recording the start before the call and the
+ * handle after it, so a crash in between is recoverable on resume: the
+ * `stage_starting` event is appended first, and a later step that finds it
+ * unclosed blocks instead of starting a second worker (see `openStage`). A
+ * runtime that throws is recorded as a `stage_failed` carrying the error
+ * message and diagnosed exactly as a failed stage is, and the original error is
+ * rethrown afterwards - the failure is both in the log and still loud at the
+ * caller, and the recorded `stage_failed` closes the start, so the next step is
+ * not mistaken for an unknown outcome.
+ */
+async function startStage({ taskId, deps, state, log, stage, runtime }) {
   const dispatch = dispatchFor(deps, stage, taskId);
-  const handle = await runtime.start({
-    stage,
-    taskId,
-    spec: dispatch.spec,
-    worktree: dispatch.worktree,
-    env: dispatch.env,
+  const runtimeId = runtimeName(deps, stage, runtime);
+  append(deps, taskId, {
+    type: "stage_starting",
+    actor: ENGINE,
+    data: { stage, runtime: runtimeId },
   });
+  let handle;
+  try {
+    handle = await runtime.start({
+      stage,
+      taskId,
+      spec: dispatch.spec,
+      worktree: dispatch.worktree,
+      env: dispatch.env,
+    });
+  } catch (error) {
+    await failStage({
+      taskId,
+      deps,
+      state,
+      log,
+      stage,
+      runtimeId,
+      observation: { startError: errorMessage(error) },
+    });
+    throw error;
+  }
   const id = handleId(handle);
   append(deps, taskId, {
     type: "stage_started",
     actor: ENGINE,
-    data: { stage, runtime: runtimeName(deps, stage, runtime), handle: id },
+    data: { stage, runtime: runtimeId, handle: id },
   });
   return { status: STEP.STARTED, stage, handle: id };
 }
@@ -455,6 +518,9 @@ function nextSeq(deps, taskId) {
  * How many agents a run has started: every `stage_started` event appended at or
  * after `startSeq` that dispatches an agent. The `integrate` stage records a
  * `stage_started` marker of its own for the VCS merge, which is not an agent.
+ * A `stage_starting` is not counted: the limit counts the agents a run has
+ * actually started, and a start whose outcome is unknown (or was refused) has
+ * recorded no agent.
  */
 function runAgentStarts(events, startSeq) {
   let count = 0;
@@ -549,10 +615,15 @@ function assertDeps(deps) {
  * One step: rebuild the state by replaying the log, and then, for the current
  * stage: complete it when the recorded runtime has settled with a zero exit code
  * (or an injected gate passes), otherwise poll an already-recorded handle, or
- * start the stage's runtime and record the handle first. An agent stage that
- * finished is passed through the injected path enforcement before it advances,
- * and an `integrate` stage is merged through the injected VCS with the current
- * log head as the run head.
+ * start the stage's runtime and record the handle first. A `stage_starting`
+ * whose outcome was never recorded - a crash between the runtime call and the
+ * `stage_started` record - blocks the step with R-NEEDS-HUMAN, so an unknown
+ * start is never repeated; a human decision that names the stage closes it. A
+ * runtime whose `start` throws is recorded as a `stage_failed` and diagnosed,
+ * and the error is rethrown to the caller.
+ * An agent stage that finished is passed through the injected path enforcement
+ * before it advances, and an `integrate` stage is merged through the injected
+ * VCS with the current log head as the run head.
  *
  * `deps` is the whole environment; it is injected so this module carries no
  * rules of its own:
@@ -627,6 +698,10 @@ export async function step({ taskId, deps } = {}) {
     });
   }
 
+  if (runtime !== null && open.starting) {
+    return { status: STEP.BLOCKED, stage, rule: deps.stages.RULES.NEEDS_HUMAN };
+  }
+
   if (runtime === null) {
     return gateStage({ taskId, deps, state, log, stage });
   }
@@ -634,7 +709,7 @@ export async function step({ taskId, deps } = {}) {
   const refused = startLimitRefusal({ taskId, deps, log, stage });
   if (refused !== null) return refused;
 
-  return startStage({ taskId, deps, stage, runtime });
+  return startStage({ taskId, deps, state, log, stage, runtime });
 }
 
 /**

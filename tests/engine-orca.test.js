@@ -317,3 +317,61 @@ test("an exited worker with no settled outcome is refused, not advanced", async 
     });
   });
 });
+
+test("a failed worker-start over the real adapter stops the named dispatch and records stage_failed", async () => {
+  await withTempDir(async (dir) => {
+    const { stateDir, logPath } = writeRepo(dir);
+    // worker-start exits 1 but still names the worker it created: the adapter
+    // must stop that dispatch before it throws, and the engine must record the
+    // refused start rather than leave it invisible.
+    const scenario = {
+      "worker-start": {
+        exitCode: 1,
+        json: {
+          ok: false,
+          result: {
+            dispatchId: "ctx_fake_residual",
+            stage: "starting",
+            residualResources: [{ kind: "worker", dispatchId: "ctx_fake_residual" }],
+          },
+        },
+      },
+      "worker-stop": { json: { ok: true, result: {} } },
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      const refused = await capture(() => run([TASK, "--once", "--cwd", dir], runOverrides()));
+      assert.equal(refused.code, 1, "a refused start is not a clean step");
+      assert.match(refused.err, /orca worker-start failed \(exit 1\)/, refused.err);
+      assert.match(refused.err, /ctx_fake_residual/, refused.err);
+      assert.doesNotMatch(refused.out, /advanced/);
+
+      const events = readEvents(stateDir, TASK).events.filter(
+        (event) => event.data?.stage === "implement",
+      );
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["stage_starting", "stage_failed", "decision"],
+        "the refused start is opened, failed and diagnosed",
+      );
+      assert.deepEqual(events[0].data, { stage: "implement", runtime: "orca" });
+      assert.equal(events[1].data.runtime, "orca");
+      assert.match(events[1].data.observation.startError, /worker-start failed \(exit 1\)/);
+      assert.match(events[1].data.observation.startError, /ctx_fake_residual/);
+      assert.equal(
+        readEvents(stateDir, TASK).events.some(
+          (event) => event.type === "stage_done" && event.data.stage === "implement",
+        ),
+        false,
+        "implement is never closed by a refused start",
+      );
+
+      const calls = readCalls(logPath);
+      const starts = calls.filter((argv) => argv[1] === "worker-start");
+      assert.equal(starts.length, 1, "the failed start is never retried");
+      const stops = calls.filter((argv) => argv[1] === "worker-stop");
+      assert.equal(stops.length, 1, "exactly one worker-stop is logged for the named dispatch");
+      assert.equal(stops[0][stops[0].indexOf("--dispatch") + 1], "ctx_fake_residual");
+    });
+  });
+});
