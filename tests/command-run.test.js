@@ -783,6 +783,203 @@ test("an integrate merge writes the Yukl-Run-Head trailer with the log head", as
 });
 
 // ---------------------------------------------------------------------------
+// a runtime without `workspace`: the real anchors and enforcement, unchanged
+// ---------------------------------------------------------------------------
+
+// A runtime adapter for a sibling stage that DOES implement `workspace`. The
+// composition root switches the real path enforcement on for the whole run as
+// soon as any configured runtime reports a workspace, so pairing it with the
+// workspace-less fake adapter is what reaches makeEnforce's and makeAnchors'
+// fallback for a runtime without `workspace` - the branch the intent, the
+// architecture doc and the README call "today's behaviour". The workspace
+// itself is never resolved: the stage under test is the one being judged.
+const WORKSPACE_ADAPTER = [
+  "export function createWorkspaceRuntime() {",
+  "  return {",
+  "    workspace: () => null,",
+  '    start: () => "workspace-1",',
+  '    status: () => "exited",',
+  "    result: () => ({ exitCode: 0 }),",
+  "    stop() {},",
+  "  };",
+  "}",
+].join("\n");
+
+/**
+ * Build a temporary repository for the workspace-less runtime tests. Branch
+ * `main` carries the intent, the config, the policy and the seed commit; the
+ * working checkout then moves onto the task branch `task`, where the commits
+ * under test land, so `main...task` is exactly the work being judged. The
+ * lifecycle pairs the workspace-less fake adapter (`implement`) with a
+ * workspace-reporting sibling (`audit`).
+ */
+function writeBranchRepo(dir, { allowedPaths = ["src/**"] } = {}) {
+  mkdirSync(join(dir, "scripts", "adapters"), { recursive: true });
+  writeFileSync(join(dir, "scripts", "adapters", "fake.js"), FAKE_ADAPTER);
+  writeFileSync(join(dir, "scripts", "adapters", "workspace.js"), WORKSPACE_ADAPTER);
+  writeFileSync(join(dir, "scripts", "adapters", "vcs-github.js"), VCS_ADAPTER);
+  const lifecycle = {
+    runtimes: {
+      implement: { adapter: "fake", agent: "omp" },
+      audit: { adapter: "workspace", agent: "auditor" },
+    },
+    vcs: "vcs-github",
+    stateDir: ".orchestration/state",
+  };
+  writeFileSync(
+    join(dir, "yukl.config.json"),
+    `${JSON.stringify(baseConfig(lifecycle), null, 2)}\n`,
+  );
+  writeFileSync(join(dir, "yukl.policy.json"), `${JSON.stringify(committedPolicy(), null, 2)}\n`);
+  mkdirSync(join(dir, ".orchestration", "intents"), { recursive: true });
+  writeFileSync(
+    join(dir, ".orchestration", "intents", `${TASK}.yml`),
+    [
+      "intent:",
+      '  goal: "A runtime without workspace keeps the previous behaviour."',
+      "  scope:",
+      "    allowed_paths:",
+      ...allowedPaths.map((p) => `      - "${p}"`),
+      "consultation:",
+      "  requires_human_approval: false",
+      "",
+    ].join("\n"),
+  );
+  git(["-c", "init.defaultBranch=main", "init", "-q"], dir);
+  git(["add", "-A"], dir);
+  git(["commit", "-q", "-m", "seed"], dir);
+
+  const stateDir = join(dir, ".orchestration", "state");
+  for (const [stage, to] of SEED_TO_IMPLEMENT) seedStageDone(stateDir, stage, to);
+
+  git(["checkout", "-q", "-b", "task"], dir);
+  return { stateDir };
+}
+
+/** Write `relPath` under `dir`, creating the parent directories. */
+function writeTreeFile(dir, relPath, content = "x") {
+  const target = join(dir, relPath);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content);
+}
+
+/** Stage exactly `paths` in the checkout at `cwd` and commit them. */
+function commitPaths(cwd, paths, message) {
+  git(["add", "--", ...paths], cwd);
+  git(["commit", "-q", "-m", message], cwd);
+}
+
+/** The 40-hex commit `ref` resolves to in the checkout at `cwd`. */
+function revParse(cwd, ref) {
+  const result = spawnSync("git", [...GIT_IDENTITY, "rev-parse", ref], { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, `git rev-parse ${ref} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+test("a runtime without workspace stops an out-of-scope commit on the task branch", async () => {
+  await withTempDir(async (dir) => {
+    const repo = writeBranchRepo(dir, { allowedPaths: ["src/**"] });
+    // The commit lands on the task branch, so enforcing against `--base`
+    // itself would diff `main...main` - nothing - and pass silently.
+    writeTreeFile(dir, "outside/evil.js");
+    commitPaths(dir, ["outside/evil.js"], "out of scope");
+
+    const first = await capture(() => run([TASK, "--once", "--cwd", dir]));
+    assert.equal(first.code, 0, first.err);
+    assert.match(first.out, /yukl run: started at implement/);
+
+    const second = await capture(() => run([TASK, "--once", "--base", "main", "--cwd", dir]));
+    assert.equal(second.code, 1, "an out-of-scope commit on the task branch is not a clean step");
+    assert.match(second.out, /R-PATH-SCOPE/);
+    assert.doesNotMatch(second.out, /advanced/);
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    const enforcement = events.filter((event) => event.type === "enforcement");
+    assert.equal(enforcement.length, 1, "one enforcement event records the breach");
+    assert.equal(enforcement[0].data.stage, "implement");
+    assert.equal(enforcement[0].data.rule, "R-PATH-SCOPE");
+    assert.ok(
+      enforcement[0].data.violations.some((v) =>
+        /outside\/evil\.js matches no allowed_paths/.test(v),
+      ),
+      JSON.stringify(enforcement[0].data.violations),
+    );
+    assert.equal(
+      stageDoneTo(repo.stateDir, "prove").length,
+      0,
+      "implement is never closed over an out-of-scope commit",
+    );
+  });
+});
+
+test("a runtime without workspace is not path-enforced without --base", async () => {
+  await withTempDir(async (dir) => {
+    const repo = writeBranchRepo(dir, { allowedPaths: ["src/**"] });
+    // The same out-of-scope commit the enforced run refuses; without `--base`
+    // the run is a local preview, so it judges nothing.
+    writeTreeFile(dir, "outside/evil.js");
+    commitPaths(dir, ["outside/evil.js"], "out of scope");
+
+    const first = await capture(() => run([TASK, "--once", "--cwd", dir]));
+    assert.equal(first.code, 0, first.err);
+    assert.match(first.out, /yukl run: started at implement/);
+
+    const second = await capture(() => run([TASK, "--once", "--cwd", dir]));
+    assert.equal(second.code, 0, second.err);
+    assert.match(second.out, /yukl run: advanced/);
+    assert.match(second.out, /implement -> prove/);
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    assert.equal(
+      events.some((event) => event.type === "enforcement"),
+      false,
+      "without --base the run records no enforcement, however out of scope the commit",
+    );
+    const done = stageDoneTo(repo.stateDir, "prove");
+    assert.equal(done.length, 1, "the stage advances without a base ref");
+    assert.equal(done[0].data.stage, "implement");
+  });
+});
+
+test("a runtime without workspace anchors at the task branch's contract commit", async () => {
+  await withTempDir(async (dir) => {
+    const repo = writeBranchRepo(dir, { allowedPaths: ["src/**"] });
+    const contractPath = `.orchestration/contracts/${TASK}.json`;
+    writeTreeFile(dir, contractPath, "{}");
+    commitPaths(dir, [contractPath], "the contract");
+    const contractCommit = revParse(dir, "HEAD");
+
+    // A later in-scope commit, so the branch tip no longer touches the
+    // contract and an anchor that fell back to the tip would be visible.
+    writeTreeFile(dir, "src/late.js");
+    commitPaths(dir, ["src/late.js"], "in scope");
+    const branchTip = revParse(dir, "HEAD");
+    assert.notEqual(contractCommit, branchTip, "the tip has moved past the contract");
+
+    const first = await capture(() => run([TASK, "--once", "--cwd", dir]));
+    assert.equal(first.code, 0, first.err);
+
+    const second = await capture(() => run([TASK, "--once", "--base", "main", "--cwd", dir]));
+    assert.equal(second.code, 0, second.err);
+    assert.match(second.out, /implement -> prove/);
+
+    const events = readEvents(repo.stateDir, TASK).events;
+    assert.equal(
+      events.some((event) => event.type === "enforcement"),
+      false,
+      "both commits are inside the intent's scope",
+    );
+    const done = stageDoneTo(repo.stateDir, "prove");
+    assert.equal(done.length, 1);
+    assert.equal(
+      done[0].anchor.commit,
+      contractCommit,
+      "the anchor is the task branch's contract commit, not the branch tip",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // the lifecycle validator
 // ---------------------------------------------------------------------------
 

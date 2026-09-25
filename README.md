@@ -141,7 +141,10 @@ in a hash-chained log:
   `enforcement` event carrying `worker workspace unresolvable: <reason>` rather
   than anchoring the wrong commit. A runtime without `workspace` - the fake
   adapter - keeps the previous behaviour: path enforcement still runs on the
-  orchestrator's branch, and only when `--base` is given.
+  orchestrator's branch, and only when `--base` is given
+  (`a runtime without workspace stops an out-of-scope commit on the task branch`
+  and `a runtime without workspace is not path-enforced without --base` in
+  `tests/command-run.test.js`).
 - `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
   working copy `@` of a colocated Jujutsu workspace as the Git branch `yukl-wc`
   (or `--bookmark`), so a worker can be branched from the state the human has on
