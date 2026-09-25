@@ -29,6 +29,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   releases it however the command ends, and a lock whose recorded process is
   gone is reclaimed by the next acquirer while an unparseable lock is refused
   rather than reclaimed (v3-unattended).
+- `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes a
+  colocated Jujutsu working copy (`@`) as the Git branch `yukl-wc`, so
+  `orca orchestration worker-start --base-branch yukl-wc` hands a worker the
+  state the human has on disk instead of the branch tip: work that exists only
+  in `@` is invisible to a worker branched from a Git ref. `yukl run` runs the
+  same sync before every agent start it makes, and the worker branches from the
+  published working-copy ref even when `--base` is given, which governs the
+  config, policy, enforcement and merge target the run reads instead. The sync
+  moves a bookmark and exports it and never edits `@` or its description, and
+  it fails closed - exit 1, the dispatch refused - on a `.jj` at or above the
+  working directory that jj cannot read, a conflicting, unreadable or
+  remote-tracking bookmark, a custom bookmark that does not already point at
+  `@`, or a Git ref that does not resolve to the exported commit; a plain Git
+  repository exits 0 and publishes nothing (v3-w2-vcs-sync).
 
 ### Changed
 - Every drafting runtime routes to `omp`: `orca.yaml` `agents.drafter.agent`, the
@@ -187,6 +201,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change becomes HEAD (task E).
 
 ### Fixed
+- `.gitignore` now ignores the lock broker's reclaim guard
+  (`.orchestration/locks/*.lock.reclaim`), so a reclaimer that crashed
+  mid-reclaim no longer leaves an untracked file in the working tree (v3-docs).
 - `yukl render` resolves `reads` ids against `flow.config.json` when the given
   `--config` does not define the stage, so cross-config renders such as
   `review-pass-a --config review.config.json` no longer exit 2 (task D).
@@ -218,7 +235,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serialised, so two acquirers colliding on a crashed reclaimer's guard can in
   principle both take it; the same-owner re-check narrows that window but does
   not close it. The module header of `scripts/lifecycle/locks.js` and section
-  4.15 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
+  4.16 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
   (v3-unattended).
 - The unattended-loop tests fail fast instead of hanging when a run limit stops
   firing: their fake sleep and fake runtime are bounded, so a loop with no exit
@@ -234,7 +251,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Scheduled artifact purge implementing the retention policy in
   `.orchestration/artifacts/README.md`.
 - GitHub Action implementing the Phase 5 feedback loop (see `docs/SDLC_PLAN.md`).
-- Phase 3 autonomous loop scheduling.
+- Phase 3 trigger layer: cron or overnight triggering and the PR-babysitting
+  loops (the unattended loop and `yukl schedule` shipped in v3-unattended).
 
 ## [2.1.0] - 2026-09-22
 

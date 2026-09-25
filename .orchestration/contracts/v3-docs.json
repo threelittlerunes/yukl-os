@@ -1,0 +1,15 @@
+{
+  "task_id": "v3-docs",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".gitignore",
+    ".orchestration/contracts/v3-docs.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/SDLC_PLAN.md",
+    "docs/YUKL_ARCHITECTURE.md"
+  ]
+}
