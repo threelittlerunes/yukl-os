@@ -488,7 +488,8 @@ A runtime adapter implements `start`, `status`, `result` and `stop`. The
 bundled adapters include `fake` (a scripted test double), `orca` (drives the
 Orca CLI through argument arrays) and `vcs-git-local` (merges through local
 git); `vcs-github` merges through the GitHub CLI, and each adapter file has its
-own test suite.
+own test suite. The bundled Orca adapter's handle, result and base-branch
+shapes are specified in section 4.16.
 
 ### 4.11 The lifecycle directory stays adapter-neutral
 <!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
@@ -633,7 +634,46 @@ not Git-branch-shaped, all refused before jj is spawned). `--json` prints the
 result object on one line instead of the human summary, so a calling hook can
 read it.
 
-### 4.16 Known limits
+### 4.16 The Orca adapter: handle, result and base branch
+<!-- status: implemented tests=tests/engine-orca.test.js#yukl run --once drives a real-adapter start to an advanced stage -->
+
+The bundled Orca adapter is the runtime that the engine drives through the
+interface of section 4.10, and three of its shapes are load-bearing.
+
+**The handle is the dispatch id string.** `start` returns the Orca dispatch id
+itself - a non-empty string - and `status`, `result` and `stop` accept that
+string back. The engine normalises a start's return value through `handleId`
+(section 4.1), which accepts a string or `{ id }` and refuses everything else,
+then records the id in `stage_started.data.handle` and hands it back on every
+poll. The shipped `{ dispatchId }` object was refused by that check after Orca
+had already started a worker, so the run could never advance; the bare id is
+the shape that survives the round trip. A value that is not a non-empty string
+is a foreign handle - one this adapter never produced - and is answered without
+calling Orca at all: `status` reports `unverifiable`, `result` returns null and
+`stop` does nothing. Returning the outcome word from `result` was the same
+class of mistake: the engine reads `result.exitCode`, so `result` returns
+`{ exitCode: 0 }` for a `succeeded` projection and `{ exitCode: 1 }` for
+`failed`, and null while the projection is unsettled. A null result from an
+`exited` worker is treated as a refusal, not a success.
+
+`--base-branch` is emitted only when a base is known. `null`, `undefined` and
+`""` all omit the flag pair entirely, so Orca falls back to the repository's
+default base through its documented omission ("omit `--base-branch` to use the
+repo default base") rather than through an empty value. Experiment E6 (Orca
+1.4.210, 2026-09-25) found that `--base-branch ""` is accepted and also falls
+back to the default - the worktree was created from `refs/remotes/origin/main` -
+but that empty-string behaviour is undocumented, so the adapter does not depend
+on it.
+
+The regression guard is an integration test over the real composition root:
+`yukl run --once` in a temporary repository whose lifecycle block routes
+`implement` to the Orca adapter and the fake CLI starts exactly one worker,
+records the dispatch id as the handle, and then advances `implement -> prove`
+once `worker-show` reports the worker exited with a `succeeded` outcome.
+Restoring the shipped `{ dispatchId }` return makes that test fail with
+`runtime.start must return a non-empty string handle id`.
+
+### 4.17 Known limits
 <!-- status: background -->
 
 Four limits bound what the machinery above can prove, and they are worth
