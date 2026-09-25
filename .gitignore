@@ -7,6 +7,7 @@ node_modules/
 .orchestration/artifacts/*.log.gz
 .orchestration/worktrees/
 .orchestration/locks/*.lock
+.orchestration/locks/*.lock.reclaim
 
 # Packaging
 *.tgz
