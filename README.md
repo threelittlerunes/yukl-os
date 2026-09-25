@@ -117,7 +117,15 @@ in a hash-chained log:
   unless both run limits in `yukl.policy.json` are positive integers. The two
   limits bound an attended run in the same way - a breach appends the same
   `enforcement` event and stops the run - so `--unattended` changes only how the
-  loop behaves between steps.
+  loop behaves between steps. Every start is recorded before it is made: a
+  stage whose previous `stage_starting` has no recorded outcome blocks with
+  `R-NEEDS-HUMAN` instead of starting a second worker (a `yukl decide override
+  --to <stage>` clears it), and a runtime whose `start` throws is recorded as a
+  `stage_failed`, diagnosed like any other failure, and then surfaced as the
+  run's error so the command still exits 1 with the message. The one exception
+  is a start whose residual worker could not be proven stopped: it is recorded
+  as `stage_start_unknown`, gets no diagnosis, and blocks the next step like a
+  crash, so it is never retried while that worker may still be live.
 - `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
   working copy `@` of a colocated Jujutsu workspace as the Git branch `yukl-wc`
   (or `--bookmark`), so a worker can be branched from the state the human has on

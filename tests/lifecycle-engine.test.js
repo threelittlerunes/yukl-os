@@ -185,7 +185,8 @@ test("a crash after start resumes by polling the same handle and starts no secon
     const log = readEvents(dir, taskId);
     assert.deepEqual(
       log.events.map((e) => e.type),
-      ["stage_started", "stage_done"],
+      ["stage_starting", "stage_started", "stage_done"],
+      "the start is opened before the runtime call and closed by the handle",
     );
   });
 });
@@ -563,6 +564,343 @@ test("a live runtime blocks the loop without starting a second agent", async () 
     assert.equal(result.status, "waiting");
     assert.equal(result.stage, "intent");
     assert.equal(starts, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start safety: the start is recorded before the runtime call, so a start whose
+// outcome is unknown blocks instead of being repeated, and a throwing start is
+// recorded and diagnosed like any other failure
+// ---------------------------------------------------------------------------
+
+/** A settled runtime that counts its starts, so a test can prove "once". */
+function countingRuntime() {
+  const runtime = {
+    name: "counting",
+    startCount: 0,
+    start({ stage }) {
+      runtime.startCount += 1;
+      return `handle-${stage}`;
+    },
+    status: () => "exited",
+    result: () => ({ exitCode: 0 }),
+    stop() {},
+  };
+  return runtime;
+}
+
+/** A runtime whose `start` throws, counting every attempt. */
+function throwingRuntime(message) {
+  const runtime = {
+    name: "boom",
+    startCount: 0,
+    start() {
+      runtime.startCount += 1;
+      throw new Error(message);
+    },
+    status: () => "unverifiable",
+    result: () => null,
+    stop() {},
+  };
+  return runtime;
+}
+
+/**
+ * A runtime whose `start` throws the Orca adapter's unknown-outcome error: the
+ * failed start named a residual worker whose `worker-stop` could not be proven
+ * to have stopped it, so the thrown value carries `startOutcomeUnknown`.
+ */
+function unknownStartRuntime() {
+  const runtime = {
+    name: "orca",
+    startCount: 0,
+    start() {
+      runtime.startCount += 1;
+      const error = new Error(
+        "orca worker-start failed (exit 1); worker-stop failed for residual worker ctx_fake_residual (worker-stop exit 1); it may still be running: start refused",
+      );
+      error.startOutcomeUnknown = true;
+      throw error;
+    },
+    status: () => "unverifiable",
+    result: () => null,
+    stop() {},
+  };
+  return runtime;
+}
+
+test("a throwing start is recorded as stage_failed and diagnosed", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-throws";
+    const runtime = throwingRuntime("worker-start exploded");
+    const seen = [];
+    const deps = makeDeps(dir, {
+      runtime: () => runtime,
+      decide: (observation, history) => {
+        seen.push({ observation, history });
+        return { kind: "retry", rule: "R-DIAGNOSE" };
+      },
+    });
+
+    // The start error is recorded and diagnosed, then rethrown: the caller
+    // still sees the original failure, and the log carries it.
+    await assert.rejects(step({ taskId, deps }), /worker-start exploded/);
+    assert.equal(runtime.startCount, 1, "the throwing start is attempted once");
+    assert.equal(seen.length, 1, "the start error reaches the diagnosis");
+    assert.deepEqual(seen[0].observation, { startError: "worker-start exploded" });
+    assert.equal(seen[0].history.attempts, 0);
+
+    const log = readEvents(dir, taskId);
+    assert.deepEqual(
+      log.events.map((e) => e.type),
+      ["stage_starting", "stage_failed", "decision"],
+    );
+    assert.equal(log.events[0].actor, "engine");
+    assert.deepEqual(log.events[0].data, { stage: "intent", runtime: "boom" });
+    assert.equal(log.events[1].actor, "engine");
+    assert.equal(log.events[1].data.stage, "intent");
+    assert.equal(log.events[1].data.runtime, "boom");
+    assert.deepEqual(log.events[1].data.observation, { startError: "worker-start exploded" });
+    assert.equal(log.events[2].actor, "engine");
+    assert.deepEqual(log.events[2].decision, { kind: "retry", rule: "R-DIAGNOSE" });
+    assert.equal(log.events[2].data.attempt, 1);
+
+    // The recorded stage_failed closes the stage_starting, so the next step is
+    // not blocked as an unknown outcome: it starts the stage again, and only
+    // because the diagnosis chose retry.
+    await assert.rejects(step({ taskId, deps }), /worker-start exploded/);
+    assert.equal(runtime.startCount, 2, "the recorded failure is not an unknown start");
+  });
+
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-escalates";
+    const runtime = throwingRuntime("worker-start exploded");
+    const deps = makeDeps(dir, {
+      runtime: () => runtime,
+      decide: () => ({ kind: "escalate", rule: "R-DIAGNOSE" }),
+    });
+
+    await assert.rejects(
+      runUntilBlocked({ taskId, deps, maxSteps: 64 }),
+      /worker-start exploded/,
+      "a throwing start aborts the loop with the original error",
+    );
+    assert.equal(runtime.startCount, 1, "the loop never retries a throwing start on its own");
+    const decision = readEvents(dir, taskId).events.find((e) => e.type === "decision");
+    assert.equal(decision.decision.kind, "escalate", "the escalation is the recorded diagnosis");
+  });
+});
+
+test("a start whose residual worker could not be stopped blocks the next step instead of retrying", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-unknown-stop";
+    const runtime = unknownStartRuntime();
+    const diagnosed = [];
+    const deps = makeDeps(dir, {
+      runtime: () => runtime,
+      decide: (observation) => {
+        diagnosed.push(observation);
+        return { kind: "retry", rule: "R-DIAGNOSE" };
+      },
+    });
+
+    // The adapter could not prove the residual worker stopped, so the start's
+    // outcome is unknown: the error is rethrown and recorded, but it is not
+    // diagnosed, and no stage_failed closes the stage_starting.
+    await assert.rejects(step({ taskId, deps }), /it may still be running/);
+    assert.equal(runtime.startCount, 1, "the failed start is attempted once");
+    assert.equal(diagnosed.length, 0, "an unknown outcome is never diagnosed");
+
+    const events = readEvents(dir, taskId).events;
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["stage_starting", "stage_start_unknown"],
+      "the unknown start is opened and recorded, with no stage_failed and no decision",
+    );
+    assert.equal(events[1].actor, "engine");
+    assert.equal(events[1].data.stage, "intent");
+    assert.equal(events[1].data.runtime, "orca");
+    assert.deepEqual(Object.keys(events[1].data.observation), ["startError"]);
+    assert.match(events[1].data.observation.startError, /it may still be running/);
+
+    // The unknown start is not closed, so the next step blocks for a human and
+    // starts nothing: a retry would race the worker that may still be live.
+    const outcome = await step({ taskId, deps });
+    assert.equal(outcome.status, "blocked");
+    assert.equal(outcome.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(outcome.stage, "intent");
+    assert.equal(runtime.startCount, 1, "the next step starts no second worker");
+    assert.equal(diagnosed.length, 0, "the block still records no diagnosis");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((event) => event.type),
+      ["stage_starting", "stage_start_unknown"],
+      "the block appends nothing",
+    );
+
+    // And the loop that would carry the retry out blocks in turn.
+    const result = await runUntilBlocked({ taskId, deps, maxSteps: 64 });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(runtime.startCount, 1, "the loop stops before the next agent start");
+  });
+});
+
+test("a start with unknown outcome blocks with R-NEEDS-HUMAN and starts nothing", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-unknown";
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom" },
+    });
+    const runtime = countingRuntime();
+    const deps = makeDeps(dir, { runtime: () => runtime });
+
+    const outcome = await step({ taskId, deps });
+    assert.equal(outcome.status, "blocked");
+    assert.equal(outcome.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(outcome.stage, "intent");
+    assert.equal(runtime.startCount, 0, "an unknown start is never repeated");
+
+    const result = await runUntilBlocked({ taskId, deps, maxSteps: 64 });
+    assert.equal(result.status, "blocked", "the loop stops on the unknown start too");
+    assert.equal(result.rule, stages.RULES.NEEDS_HUMAN);
+    assert.equal(result.stage, "intent");
+    assert.equal(runtime.startCount, 0);
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((e) => e.type),
+      ["stage_starting"],
+      "the block records nothing that advances",
+    );
+  });
+});
+
+test("a human_decision naming the stage clears the unknown start so the next step starts once", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-human";
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom" },
+    });
+    // The event `yukl decide override --task <id> --to intent --by <name>
+    // --reason <text>` persists: the decision names the stage it keeps.
+    appendEvent(dir, taskId, {
+      type: "human_decision",
+      actor: "human:alice",
+      data: {
+        decision: "override",
+        by: "alice",
+        reason: "the unknown start is resolved",
+        appliedAtSeq: 1,
+        to: "intent",
+      },
+    });
+
+    const runtime = countingRuntime();
+    const outcome = await step({ taskId, deps: makeDeps(dir, { runtime: () => runtime }) });
+    assert.equal(outcome.status, "started");
+    assert.equal(outcome.stage, "intent");
+    assert.equal(outcome.handle, "handle-intent");
+    assert.equal(runtime.startCount, 1, "the stage is started exactly once after the decision");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((e) => e.type),
+      ["stage_starting", "human_decision", "stage_starting", "stage_started"],
+      "the cleared start is closed and the new one is opened and recorded",
+    );
+  });
+});
+
+test("a human_decision whose data.stage names the stage clears the unknown start", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-human-stage";
+    // The other shape the engine accepts: the decision persists the stage it
+    // resolves in `data.stage` (the field a stage event carries) instead of the
+    // override's `data.to`. Both must close the unknown start; this guards the
+    // `data.stage` branch of `humanDecisionFor`.
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "orca" },
+    });
+    appendEvent(dir, taskId, {
+      type: "stage_start_unknown",
+      actor: "engine",
+      data: {
+        stage: "intent",
+        runtime: "orca",
+        observation: { startError: "worker-stop failed for residual worker ctx_1" },
+      },
+    });
+    appendEvent(dir, taskId, {
+      type: "human_decision",
+      actor: "human:alice",
+      data: {
+        decision: "override",
+        by: "alice",
+        reason: "the residual worker was stopped by hand",
+        appliedAtSeq: 1,
+        stage: "intent",
+      },
+    });
+
+    const runtime = countingRuntime();
+    const outcome = await step({ taskId, deps: makeDeps(dir, { runtime: () => runtime }) });
+    assert.equal(outcome.status, "started");
+    assert.equal(outcome.stage, "intent");
+    assert.equal(outcome.handle, "handle-intent");
+    assert.equal(runtime.startCount, 1, "the stage starts exactly once after the decision");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((e) => e.type),
+      [
+        "stage_starting",
+        "stage_start_unknown",
+        "human_decision",
+        "stage_starting",
+        "stage_started",
+      ],
+      "the decision closes the unknown start and the new start is recorded",
+    );
+  });
+});
+
+test("a start whose outcome is unknown does not spend the agent-start limit", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-limit";
+    // A previous run opened a start and recorded its failure.
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom" },
+    });
+    appendEvent(dir, taskId, {
+      type: "stage_failed",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom", observation: { startError: "boom" } },
+    });
+
+    const runtime = countingRuntime();
+    const result = await runUntilBlocked({
+      taskId,
+      deps: makeDeps(dir, { runtime: () => runtime }),
+      maxSteps: 64,
+      limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 },
+    });
+
+    // The limit counts this run's `stage_started` events only, so the recorded
+    // unknown start does not spend it: intent starts, and the refusal names the
+    // next stage.
+    assert.equal(result.status, "limit");
+    assert.deepEqual(result.limit, { name: RUN_LIMITS.STARTS, max: 1, observed: 1 });
+    assert.equal(result.stage, "scope");
+    assert.equal(runtime.startCount, 1, "the failed start left the limit unspent");
+    const started = readEvents(dir, taskId).events.filter(
+      (event) => event.type === "stage_started",
+    );
+    assert.deepEqual(
+      started.map((event) => event.data.stage),
+      ["intent"],
+    );
   });
 });
 
