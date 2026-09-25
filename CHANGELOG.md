@@ -45,6 +45,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository exits 0 and publishes nothing (v3-w2-vcs-sync).
 
 ### Changed
+- The Orca runtime adapter now speaks the shapes the lifecycle engine
+  enforces, so `yukl run` can drive an Orca worker end to end: `start` returns
+  the Orca dispatch id as a non-empty string handle (the engine records it in
+  `stage_started.data.handle` and hands it back on every poll), `status`,
+  `result` and `stop` accept that string and treat any other value as a foreign
+  handle (unverifiable status, null result, no Orca call), and `result` returns
+  `{ exitCode: 0 }` for a `succeeded` projection and `{ exitCode: 1 }` for
+  `failed` instead of the outcome word, since the engine reads
+  `result.exitCode`. The shipped `{ dispatchId }` handle was refused by the
+  engine's `handleId` ("runtime.start must return a non-empty string handle
+  id") after Orca had already started one worker, and the outcome word was read
+  as an exit code of null; both are regression-guarded by
+  `tests/engine-orca.test.js`, which drives `yukl run --once` through the real
+  adapter and the fake Orca from a start to an advanced stage, and whose second
+  test - `an exited worker with no settled outcome is refused, not advanced` -
+  drives an exited worker whose outcome is neither `succeeded` nor `failed` and
+  asserts the engine refuses that poll instead of advancing it (ha-06).
+- The Orca adapter omits `--base-branch` from `worker-start` entirely when no
+  base is known (`baseBranch` null, undefined or `""`) instead of passing an
+  empty string, so it relies on Orca's documented "omit `--base-branch` to use
+  the repo default base" rather than on undocumented behaviour. Experiment E6
+  (Orca 1.4.210, 2026-09-25): `orca orchestration worker-start --base-branch ""`
+  is accepted and also falls back to the repository's default base - the
+  worktree was created from `refs/remotes/origin/main` - but that empty-string
+  path is untested by Orca's help, so the adapter omits the pair
+  (`docs/YUKL_ARCHITECTURE.md` section 4.16) (ha-06).
 - Every drafting runtime routes to `omp`: `orca.yaml` `agents.drafter.agent`, the
   `expert-power-drafter` stage in `flow.config.json` and
   `yukl.config.json` `lifecycle.runtimes.implement.agent` (audit and review stay
@@ -235,7 +261,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serialised, so two acquirers colliding on a crashed reclaimer's guard can in
   principle both take it; the same-owner re-check narrows that window but does
   not close it. The module header of `scripts/lifecycle/locks.js` and section
-  4.16 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
+  4.17 of `docs/YUKL_ARCHITECTURE.md` record the residual limitation
   (v3-unattended).
 - The unattended-loop tests fail fast instead of hanging when a run limit stops
   firing: their fake sleep and fake runtime are bounded, so a loop with no exit

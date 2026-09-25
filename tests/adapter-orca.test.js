@@ -100,7 +100,7 @@ test("start passes the plan's argument array to worker-start and returns the dis
           taskId: "v2-w2-orca-adapter",
           spec: "implement the orca adapter",
         });
-        assert.deepEqual(handle, { dispatchId: "ctx_fake_1" });
+        assert.equal(handle, "ctx_fake_1", "the handle is the dispatch id string itself");
 
         const calls = readCalls(logPath);
         assert.equal(calls.length, 1, "worker-start is called exactly once");
@@ -122,6 +122,64 @@ test("start passes the plan's argument array to worker-start and returns the dis
       },
     );
   });
+});
+
+test("start omits --base-branch entirely when no base is configured", async () => {
+  const OMITTED = [undefined, null, ""];
+  for (const base of OMITTED) {
+    await withTempDir(async (dir) => {
+      const scenarioPath = join(dir, "scenario.json");
+      const logPath = join(dir, "calls.log");
+      writeFileSync(
+        scenarioPath,
+        JSON.stringify({
+          "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_1" } } },
+        }),
+      );
+
+      const savedLog = process.env.FAKE_ORCA_LOG;
+      const savedScenario = process.env.FAKE_ORCA_SCENARIO;
+      process.env.FAKE_ORCA_LOG = logPath;
+      process.env.FAKE_ORCA_SCENARIO = scenarioPath;
+      try {
+        const runtime = createOrcaRuntime({
+          orca: [process.execPath, FAKE],
+          agent: "omp",
+          baseBranch: base,
+          name: "test-worker",
+        });
+        runtime.start({ taskId: "t", spec: "s" });
+
+        const calls = readCalls(logPath);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(
+          calls[0],
+          [
+            "orchestration",
+            "worker-start",
+            "--spec",
+            "s",
+            "--worktree",
+            "new-top-level",
+            "--name",
+            "test-worker",
+            "--agent",
+            "omp",
+            "--json",
+          ],
+          `baseBranch ${JSON.stringify(base)} must omit the flag pair, not pass an empty value`,
+        );
+        assert.equal(
+          calls[0].includes("--base-branch"),
+          false,
+          "no --base-branch may reach Orca without a base",
+        );
+      } finally {
+        restoreEnv("FAKE_ORCA_LOG", savedLog);
+        restoreEnv("FAKE_ORCA_SCENARIO", savedScenario);
+      }
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -206,7 +264,7 @@ for (const scenarioCase of STATUS_CASES) {
   test(`status: ${scenarioCase.name}`, async () => {
     await withTempDir(async (dir) => {
       await withFake(dir, shown(scenarioCase.reply), async (runtime) => {
-        assert.equal(runtime.status({ dispatchId: "ctx_fake_1" }), scenarioCase.expected);
+        assert.equal(runtime.status("ctx_fake_1"), scenarioCase.expected);
       });
     });
   });
@@ -215,9 +273,21 @@ for (const scenarioCase of STATUS_CASES) {
 test("status of a foreign handle is unverifiable and calls no Orca command", async () => {
   await withTempDir(async (dir) => {
     await withFake(dir, shown({ json: { ok: true, result: {} } }), async (runtime, { logPath }) => {
-      assert.equal(runtime.status(null), "unverifiable");
-      assert.equal(runtime.status({}), "unverifiable");
-      assert.equal(runtime.status({ id: "not-mine" }), "unverifiable");
+      // Only a non-empty string is a handle this adapter produced. The object
+      // shape the adapter used to return is foreign now, and must not be
+      // accepted back.
+      for (const foreign of [null, undefined, {}, "", { id: "not-mine" }, 42, true]) {
+        assert.equal(
+          runtime.status(foreign),
+          "unverifiable",
+          `status(${JSON.stringify(foreign)}) must be unverifiable`,
+        );
+      }
+      assert.equal(
+        runtime.status({ dispatchId: "ctx_fake_1" }),
+        "unverifiable",
+        "the old { dispatchId } handle is foreign",
+      );
       assert.deepEqual(readCalls(logPath), []);
     });
   });
@@ -229,14 +299,14 @@ test("status of a foreign handle is unverifiable and calls no Orca command", asy
 
 const RESULT_CASES = [
   {
-    name: "a settled succeeded outcome is returned",
+    name: "a settled succeeded outcome is an exit code of 0",
     reply: { json: { ok: true, result: { projection: { outcome: "succeeded" } } } },
-    expected: "succeeded",
+    expected: { exitCode: 0 },
   },
   {
-    name: "a settled failed outcome is returned",
+    name: "a settled failed outcome is an exit code of 1",
     reply: { json: { ok: true, result: { projection: { outcome: "failed" } } } },
-    expected: "failed",
+    expected: { exitCode: 1 },
   },
   {
     name: "an in_progress outcome means not settled",
@@ -249,8 +319,26 @@ const RESULT_CASES = [
     expected: null,
   },
   {
+    name: "an unknown outcome word is not settled",
+    reply: { json: { ok: true, result: { projection: { outcome: "stopped" } } } },
+    expected: null,
+  },
+  {
     name: "unparseable JSON means not settled",
     reply: { stdout: "{ broken" },
+    expected: null,
+  },
+  {
+    name: "a non-zero worker-show means not settled",
+    reply: {
+      exitCode: 1,
+      json: { ok: true, result: { projection: { outcome: "succeeded" } } },
+    },
+    expected: null,
+  },
+  {
+    name: "an ok:false worker-show means not settled",
+    reply: { json: { ok: false, result: { projection: { outcome: "succeeded" } } } },
     expected: null,
   },
 ];
@@ -259,11 +347,30 @@ for (const scenarioCase of RESULT_CASES) {
   test(`result: ${scenarioCase.name}`, async () => {
     await withTempDir(async (dir) => {
       await withFake(dir, shown(scenarioCase.reply), async (runtime) => {
-        assert.equal(runtime.result({ dispatchId: "ctx_fake_1" }), scenarioCase.expected);
+        assert.deepEqual(runtime.result("ctx_fake_1"), scenarioCase.expected);
       });
     });
   });
 }
+
+test("result of a foreign handle is null and calls no Orca command", async () => {
+  await withTempDir(async (dir) => {
+    await withFake(
+      dir,
+      shown({ json: { ok: true, result: { projection: { outcome: "succeeded" } } } }),
+      async (runtime, { logPath }) => {
+        for (const foreign of [null, undefined, {}, "", { dispatchId: "ctx_fake_1" }, 7]) {
+          assert.equal(
+            runtime.result(foreign),
+            null,
+            `result(${JSON.stringify(foreign)}) must be null`,
+          );
+        }
+        assert.deepEqual(readCalls(logPath), []);
+      },
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // stop
@@ -275,7 +382,7 @@ test("stop fences the dispatch through worker-stop", async () => {
       dir,
       { "worker-stop": { json: { ok: true, result: {} } } },
       async (runtime, { logPath }) => {
-        runtime.stop({ dispatchId: "ctx_fake_1" });
+        runtime.stop("ctx_fake_1");
         assert.deepEqual(readCalls(logPath), [
           ["orchestration", "worker-stop", "--dispatch", "ctx_fake_1", "--json"],
         ]);
@@ -287,9 +394,9 @@ test("stop fences the dispatch through worker-stop", async () => {
 test("stop ignores a foreign handle and calls no Orca command", async () => {
   await withTempDir(async (dir) => {
     await withFake(dir, { "worker-stop": { json: { ok: true } } }, async (runtime, { logPath }) => {
-      runtime.stop({});
-      runtime.stop(null);
-      runtime.stop({ id: "not-mine" });
+      for (const foreign of [null, undefined, {}, "", { dispatchId: "ctx_fake_1" }, 12]) {
+        runtime.stop(foreign);
+      }
       assert.deepEqual(readCalls(logPath), []);
     });
   });
