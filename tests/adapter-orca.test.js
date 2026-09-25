@@ -624,3 +624,92 @@ test("stop ignores a foreign handle and calls no Orca command", async () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// workspace
+// ---------------------------------------------------------------------------
+
+const WORKSPACE_CASES = [
+  {
+    name: "a plain terminal.worktreePath is the worker's checkout",
+    reply: { json: { ok: true, result: { terminal: { worktreePath: "C:/ws/w1" } } } },
+    expected: { path: "C:/ws/w1" },
+  },
+  {
+    name: "result.worker.worktreeId falls back to the part after ::",
+    reply: { json: { ok: true, result: { worker: { worktreeId: "repo_1::C:/ws/w2" } } } },
+    expected: { path: "C:/ws/w2" },
+  },
+  {
+    name: "result.terminal.worktreeId falls back to the part after ::",
+    reply: { json: { ok: true, result: { terminal: { worktreeId: "repo_1::C:/ws/w3" } } } },
+    expected: { path: "C:/ws/w3" },
+  },
+  {
+    name: "an empty worktreePath falls through to the worktreeId",
+    reply: {
+      json: {
+        ok: true,
+        result: { terminal: { worktreePath: "", worktreeId: "repo_1::C:/ws/w4" } },
+      },
+    },
+    expected: { path: "C:/ws/w4" },
+  },
+  {
+    name: "a worktreeId with no :: names no path",
+    reply: { json: { ok: true, result: { worker: { worktreeId: "repo_1" } } } },
+    expected: null,
+  },
+  {
+    name: "a reply that names no path is null",
+    reply: { json: { ok: true, result: { projection: { outcome: "succeeded" } } } },
+    expected: null,
+  },
+  {
+    name: "unparseable JSON is null",
+    reply: { stdout: "not json at all" },
+    expected: null,
+  },
+  {
+    name: "a non-zero worker-show is null",
+    reply: {
+      exitCode: 1,
+      json: { ok: true, result: { terminal: { worktreePath: "C:/ws/w5" } } },
+    },
+    expected: null,
+  },
+  {
+    name: "an ok:false worker-show is null",
+    reply: { json: { ok: false, result: { terminal: { worktreePath: "C:/ws/w5" } } } },
+    expected: null,
+  },
+];
+
+for (const scenarioCase of WORKSPACE_CASES) {
+  test(`workspace: ${scenarioCase.name}`, async () => {
+    await withTempDir(async (dir) => {
+      await withFake(dir, shown(scenarioCase.reply), async (runtime) => {
+        assert.deepEqual(runtime.workspace("ctx_fake_1"), scenarioCase.expected);
+      });
+    });
+  });
+}
+
+test("workspace of a foreign handle is null and calls no Orca command", async () => {
+  await withTempDir(async (dir) => {
+    await withFake(
+      dir,
+      shown({ json: { ok: true, result: { terminal: { worktreePath: "C:/ws/w1" } } } }),
+      async (runtime, { logPath }) => {
+        for (const foreign of [null, undefined, {}, "", { dispatchId: "ctx_fake_1" }, 42, true]) {
+          assert.equal(
+            runtime.workspace(foreign),
+            null,
+            `workspace(${JSON.stringify(foreign)}) must be null`,
+          );
+        }
+        assert.deepEqual(readCalls(logPath), [], "a foreign handle calls no Orca command");
+      },
+    );
+  });
+});

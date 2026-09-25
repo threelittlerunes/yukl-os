@@ -21,6 +21,17 @@
 // run limit (which appends an `enforcement` event); an attended run keeps the
 // step-capped loop it has always had.
 //
+// An agent stage is judged where its worker committed. A runtime adapter may
+// implement the optional `workspace(handle) -> { path } | null`; when the
+// runtime of the stage's adapter does, `yukl run` reads the stage's handle from
+// the task log, resolves that checkout's `HEAD` and uses it for the stage's
+// anchor and for path enforcement instead of the orchestrator checkout's HEAD
+// and branch. An Orca worker commits in its own git worktree, so only that
+// commit names the work being judged; a workspace or HEAD that cannot be
+// resolved refuses the stage with `R-NEEDS-HUMAN` (the anchor refuses too, for
+// `R-NO-ANCHOR`), never falling back to the wrong commit. A runtime without
+// `workspace` - the fake adapter - keeps the previous behaviour exactly.
+//
 // In a colocated Jujutsu workspace every agent start publishes the Jujutsu
 // working copy into Git first (see withWorkingCopySync): Orca branches a
 // worker's worktree from a Git ref, and work that lives only in the
@@ -173,16 +184,102 @@ function currentBranch(cwd) {
   return branch === "" || branch === "HEAD" ? null : branch;
 }
 
+/** The 40-hex HEAD of the git checkout at `path`, or null. */
+function worktreeHead(path) {
+  const result = spawnSync("git", ["-C", path, "rev-parse", "HEAD"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) return null;
+  const sha = (result.stdout || "").trim();
+  return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+}
+
+/**
+ * The `handle` on the task log's last `stage_started` event for `stage`, read
+ * from the log itself rather than from the agent. Returns null when the stage
+ * has no recorded start or the recorded handle is not a non-empty string.
+ */
+function lastStageHandle(stateDir, taskId, stage) {
+  let handle = null;
+  for (const event of readEvents(stateDir, taskId).events) {
+    if (event?.type !== "stage_started" || event?.data?.stage !== stage) continue;
+    const value = event?.data?.handle;
+    if (typeof value === "string" && value !== "") handle = value;
+  }
+  return handle;
+}
+
+/**
+ * Resolve the workspace and HEAD of the worker that ran `stage`, when its
+ * runtime implements the optional `workspace` method. A runtime without that
+ * method yields `{ implements: false }`, which is today's behaviour: the run
+ * judges the orchestrator checkout. When it does implement it, the result is
+ * `{ implements: true, ok, path, sha }` or `{ implements: true, ok: false,
+ * error }` - an unresolvable workspace is never silently replaced by the
+ * orchestrator's HEAD.
+ */
+function resolveStageWorkspace({ runtimes, stateDir }, stage, taskId) {
+  const runtime = runtimes.get(stage);
+  if (runtime === null || runtime === undefined || typeof runtime.workspace !== "function") {
+    return { implements: false };
+  }
+  const handle = lastStageHandle(stateDir, taskId, stage);
+  if (handle === null) {
+    return {
+      implements: true,
+      ok: false,
+      error: `no stage_started handle is recorded for ${stage}`,
+    };
+  }
+  let shown;
+  try {
+    shown = runtime.workspace(handle);
+  } catch (err) {
+    return {
+      implements: true,
+      ok: false,
+      error: `workspace(${handle}) threw: ${err?.message ?? err}`,
+    };
+  }
+  const path = shown !== null && typeof shown === "object" ? shown.path : null;
+  if (typeof path !== "string" || path === "") {
+    return {
+      implements: true,
+      ok: false,
+      error: `worker-show reported no worktree path for ${handle}`,
+    };
+  }
+  const sha = worktreeHead(path);
+  if (sha === null) {
+    return { implements: true, ok: false, error: `git -C ${path} rev-parse HEAD failed` };
+  }
+  return { implements: true, ok: true, path, sha };
+}
+
 /**
  * Resolve a completed stage's anchor from the real anchors module: the last
  * commit that touched the task's contract path. A stage whose contract is not
  * committed yet anchors at the branch tip instead, which keeps the provenance
  * honest while an agent stage is still in flight.
+ *
+ * For a stage whose runtime reports the worker's workspace (section 4.11 of
+ * docs/YUKL_ARCHITECTURE.md), the anchor is resolved in that checkout at its
+ * HEAD, never at the orchestrator checkout's HEAD: the worker commits in its
+ * own worktree, so only the worker's HEAD names the work being judged. A
+ * workspace that cannot be resolved refuses the anchor outright (the engine
+ * then blocks with `R-NO-ANCHOR`) rather than anchoring the wrong commit.
  */
-function makeAnchors({ cwd, ref }) {
+function makeAnchors({ cwd, ref, runtimes, stateDir }) {
   return {
     anchorStage: async (stage, taskId) => {
       const relPath = `${CONTRACTS_DIR}/${taskId}.json`;
+      const worker = resolveStageWorkspace({ runtimes, stateDir }, stage, taskId);
+      if (worker.implements) {
+        if (!worker.ok) return { ok: false };
+        const anchored = anchorAt(worker.path, worker.sha, relPath);
+        if (anchored.ok) {
+          return { ok: true, anchor: { path: anchored.path, commit: anchored.commit } };
+        }
+        return { ok: true, anchor: { path: relPath, commit: worker.sha } };
+      }
       const anchored = anchorAt(cwd, ref, relPath);
       if (anchored.ok) {
         return { ok: true, anchor: { path: anchored.path, commit: anchored.commit } };
@@ -253,11 +350,35 @@ function makeDecide(policy) {
   };
 }
 
-/** Run the real path enforcement for the task branch against the base ref. */
-function makeEnforce({ cwd, base, taskId }) {
-  return async () => {
-    const branch = currentBranch(cwd) ?? DEFAULT_WORKTREE_REF;
-    const outcome = pathEnforcement({ cwd, base, taskId, branch });
+/**
+ * Run the real path enforcement for the completed stage. A stage whose runtime
+ * reports the worker's workspace is enforced against the commit the worker made
+ * there (its HEAD), not against the orchestrator checkout's branch; the base ref
+ * stays the trust root for the intent. A workspace that cannot be resolved is
+ * refused with `R-NEEDS-HUMAN` and a violation naming the reason, so an
+ * unreadable worker record stops the stage instead of passing it silently
+ * against the wrong commit. A runtime without `workspace` keeps today's
+ * behaviour: the task branch of `cwd`, enforced only when `--base` is given.
+ */
+function makeEnforce({ cwd, base, taskId, runtimes, stateDir }) {
+  return async ({ stage, taskId: stageTaskId }) => {
+    const id = typeof stageTaskId === "string" && stageTaskId !== "" ? stageTaskId : taskId;
+    const worker = resolveStageWorkspace({ runtimes, stateDir }, stage, id);
+    if (!worker.implements) {
+      if (base == null) return { ok: true, violations: [] };
+      const branch = currentBranch(cwd) ?? DEFAULT_WORKTREE_REF;
+      const outcome = pathEnforcement({ cwd, base, taskId: id, branch });
+      return { ok: outcome.ok, violations: outcome.violations, rule: outcome.rule };
+    }
+    if (!worker.ok) {
+      return {
+        ok: false,
+        rule: stages.RULES.NEEDS_HUMAN,
+        violations: [`worker workspace unresolvable: ${worker.error}`],
+      };
+    }
+    if (base == null) return { ok: true, violations: [] };
+    const outcome = pathEnforcement({ cwd, base, taskId: id, branch: worker.sha });
     return { ok: outcome.ok, violations: outcome.violations, rule: outcome.rule };
   };
 }
@@ -425,10 +546,22 @@ export async function run(argv = [], overrides = {}) {
             allowlist: config.allowlist,
           });
 
+    // A runtime that reports the worker's workspace - the Orca adapter does,
+    // the fake adapter does not - makes the run judge the commit the worker
+    // made in its own worktree: the anchor and path enforcement follow that
+    // checkout's HEAD instead of the orchestrator checkout's HEAD and branch,
+    // and a workspace that cannot be resolved blocks the stage rather than
+    // anchoring the wrong commit.
+    const reportsWorkspace = [...runtimes.values()].some(
+      (runtime) =>
+        runtime !== null && runtime !== undefined && typeof runtime.workspace === "function",
+    );
+
     const deps = {
       events: { dir: stateDir, readEvents, appendEvent, headHash },
       stages,
-      anchors: overrides.anchors ?? makeAnchors({ cwd, ref: DEFAULT_WORKTREE_REF }),
+      anchors:
+        overrides.anchors ?? makeAnchors({ cwd, ref: DEFAULT_WORKTREE_REF, runtimes, stateDir }),
       requiresHuman: makeRequiresHuman({ policy, stateDir, taskId, lifecycle }),
       runtime: (stage) => runtimes.get(stage) ?? null,
       runtimeId: (stage) => lifecycle.runtimes?.[stage]?.adapter ?? FALLBACK_RUNTIME_ID,
@@ -437,7 +570,9 @@ export async function run(argv = [], overrides = {}) {
       dispatch: overrides.dispatch ?? makeDispatch({ lifecycle, cwd, base, ref }),
       clock: overrides.clock,
     };
-    if (base != null) deps.enforce = makeEnforce({ cwd, base, taskId });
+    if (base != null || reportsWorkspace) {
+      deps.enforce = makeEnforce({ cwd, base, taskId, runtimes, stateDir });
+    }
 
     if (parsed.once) {
       const outcome = await engineStep({ taskId, deps });
