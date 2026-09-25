@@ -28,6 +28,22 @@
 // to the repository default, but that empty-string behaviour is undocumented;
 // omitting the pair states the intent without depending on it.
 //
+// A failed start is never silent. `worker-start` exits 0 only for a ready
+// worker; a failed or outcome_unknown call exits 1 and may still have created
+// the worker, naming it as `result.dispatchId` or among the `residualResources`
+// it reports. When the reply names an id, the adapter stops it through
+// `worker-stop` before throwing, and the error names the id and the
+// `residualResources`. The stop is checked, not assumed: when `worker-stop`
+// cannot be proven to have stopped that worker - a spawn error, a non-zero
+// exit, `ok: false` or an unparseable reply - the thrown error says the worker
+// "may still be running" and carries `startOutcomeUnknown = true`, which the
+// engine turns into a `stage_start_unknown` block rather than a diagnosed
+// failure (see scripts/lifecycle/engine.js). Only a proven stop is reported as
+// one, so a failed start never claims a live worker was stopped. A start with
+// no spec, no configured agent or no derivable
+// worker name is refused before any Orca command runs: an empty `--spec`,
+// `--name` or `--agent` value is never passed.
+//
 // Documented limit: Orca's worker-start has no way to set the environment of
 // the agent it launches, so this adapter cannot set YUKL_DISPATCH_ID on the
 // worker it starts. The runtime interface asks an adapter to forward it, and
@@ -73,14 +89,71 @@ function parseEnvelope(stdout) {
 }
 
 /**
+ * The first non-empty string id an entry of `residualResources` names, or null.
+ * Orca may report a leftover as a bare id or as an object describing it.
+ */
+function residualEntryId(entry) {
+  if (typeof entry === "string" && entry !== "") return entry;
+  if (entry === null || typeof entry !== "object") return null;
+  for (const key of ["dispatchId", "id"]) {
+    const value = entry[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return null;
+}
+
+/**
+ * The dispatch id a failed worker-start reply still names, or null. A failed or
+ * outcome_unknown call may already have created the worker and reports it
+ * either as `result.dispatchId` or among the `result.residualResources` it left
+ * behind. A reply that names none yields null, so the adapter stops nothing it
+ * cannot identify.
+ */
+function residualDispatchId(envelope) {
+  const result = envelope?.result;
+  if (result === null || typeof result !== "object") return null;
+  if (typeof result.dispatchId === "string" && result.dispatchId !== "") return result.dispatchId;
+  const residual = Array.isArray(result.residualResources) ? result.residualResources : [];
+  for (const entry of residual) {
+    const id = residualEntryId(entry);
+    if (id !== null) return id;
+  }
+  return null;
+}
+
+/**
+ * The error a failed worker-start throws: the exit code, the dispatch id this
+ * adapter stopped when the reply named one, Orca's `residualResources` when it
+ * reported any, and the reply's detail. `stopFailure` is the reason the stop of
+ * `stoppedId` could not be proven, or null when it was: a stop that failed is
+ * reported as such and never as a bare "stopped".
+ */
+function startFailureMessage({ status, stoppedId, stopFailure = null, envelope, detail }) {
+  const parts = [`orca worker-start failed (exit ${status})`];
+  if (stoppedId !== null) {
+    parts.push(
+      stopFailure === null
+        ? `stopped residual worker ${stoppedId}`
+        : `worker-stop failed for residual worker ${stoppedId} (${stopFailure}); it may still be running`,
+    );
+  }
+  const residual = envelope?.result?.residualResources;
+  if (Array.isArray(residual) && residual.length > 0) {
+    parts.push(`residualResources ${JSON.stringify(residual)}`);
+  }
+  return `${parts.join("; ")}: ${detail}`;
+}
+
+/**
  * Build an Orca runtime adapter. Options:
  *   - `orca`       executable, a string or [exe, ...prefixArgs] (default "orca")
- *   - `agent`      agent id passed to worker-start --agent
+ *   - `agent`      agent id passed to worker-start --agent; required and
+ *                  non-empty, because an empty --agent asks Orca to choose
  *   - `baseBranch` ref passed to worker-start --base-branch; when it is null,
  *                  undefined or an empty string the flag pair is omitted and
  *                  Orca falls back to the repository's default base
  *   - `name`       worktree name; falls back to the start call's taskId, then
- *                  its stage id
+ *                  its stage id, and a start that can derive none is refused
  *
  * The returned object implements the runtime interface. The handle is the
  * dispatch id string, and `start` returns exactly that string; every method
@@ -90,11 +163,44 @@ export function createOrcaRuntime({ orca = "orca", agent, baseBranch, name = nul
   const prefix = commandPrefix(orca);
 
   /**
+   * Stop a residual worker through `worker-stop`, and report why that could not
+   * be proven - or null when it was. A stop succeeded only when the process
+   * exited 0 and the reply is a JSON object that does not say `ok: false`: a
+   * spawn error, a non-zero exit, `ok: false` and an unparseable reply are each
+   * reported as a reason, so `start` never claims a worker it could not stop.
+   */
+  function stopResidual(handle) {
+    const stopped = run(prefix, ["orchestration", "worker-stop", "--dispatch", handle, "--json"]);
+    if (stopped.error) return `could not launch worker-stop: ${stopped.error.message}`;
+    if (stopped.status !== 0) return `worker-stop exit ${stopped.status}`;
+    const envelope = parseEnvelope(stopped.stdout);
+    if (envelope === null) return "unparseable worker-stop reply";
+    if (envelope.ok === false) return "worker-stop replied ok: false";
+    return null;
+  }
+
+  /**
    * Start exactly one Orca worker and return its dispatch id as the handle. A
    * non-zero exit, an `ok: false` envelope, a missing dispatch id or an
    * unparseable reply is a failed start and is thrown; the adapter never
    * retries a failed start, so the caller can rely on exactly one Orca call
-   * here.
+   * here. A failed reply that still names a dispatch id - a worker Orca
+   * created before the call failed or left with an unknown outcome - is
+   * stopped through `worker-stop` before the throw, and the error names that
+   * id and Orca's `residualResources`.
+   *
+   * The stop is checked. When `worker-stop` does not prove the worker gone - a
+   * spawn error, a non-zero exit, `ok: false` or an unparseable reply - the
+   * thrown error says the residual worker "may still be running", carries the
+   * `residualResources` and the start's detail, and sets
+   * `startOutcomeUnknown = true`, so the caller can block the next step instead
+   * of retrying a start that may already have a live worker. Only a proven stop
+   * is reported as "stopped residual worker <id>".
+   *
+   * The start is refused before any Orca command when it has no spec, no
+   * configured agent or no derivable worker name: an empty `--spec`, `--name`
+   * or `--agent` value is never passed, so a worker is never started without a
+   * brief, a name or an agent.
    *
    * `--base-branch` is emitted only when a base is known: null, undefined and
    * the empty string all omit the flag pair, so Orca uses the repository's
@@ -102,21 +208,38 @@ export function createOrcaRuntime({ orca = "orca", agent, baseBranch, name = nul
    * value (see the module header).
    */
   function start({ stage = null, taskId = null, spec = null } = {}) {
+    const specValue = spec == null ? "" : String(spec);
+    if (specValue.trim() === "") {
+      throw new Error(
+        "orca worker-start refused: a non-empty --spec is required, so a worker is never started without a brief",
+      );
+    }
+    if (typeof agent !== "string" || agent.trim() === "") {
+      throw new Error(
+        "orca worker-start refused: a non-empty agent is required, so a worker is never started without an agent",
+      );
+    }
     const workerName = name ?? taskId ?? stage;
+    const workerNameValue = workerName == null ? "" : String(workerName);
+    if (workerNameValue.trim() === "") {
+      throw new Error(
+        "orca worker-start refused: a worker name is required (a configured name, the taskId or the stage)",
+      );
+    }
     const baseArgs =
       baseBranch == null || baseBranch === "" ? [] : ["--base-branch", String(baseBranch)];
     const args = [
       "orchestration",
       "worker-start",
       "--spec",
-      spec == null ? "" : String(spec),
+      specValue,
       "--worktree",
       "new-top-level",
       "--name",
-      workerName == null ? "" : String(workerName),
+      workerNameValue,
       ...baseArgs,
       "--agent",
-      agent == null ? "" : String(agent),
+      agent,
       "--json",
     ];
     const result = run(prefix, args);
@@ -131,8 +254,14 @@ export function createOrcaRuntime({ orca = "orca", agent, baseBranch, name = nul
       typeof dispatchId !== "string" ||
       dispatchId === ""
     ) {
+      const stoppedId = residualDispatchId(envelope);
+      const stopFailure = stoppedId === null ? null : stopResidual(stoppedId);
       const detail = (result.stderr || "").trim() || (result.stdout || "").trim();
-      throw new Error(`orca worker-start failed (exit ${result.status}): ${detail}`);
+      const error = new Error(
+        startFailureMessage({ status: result.status, stoppedId, stopFailure, envelope, detail }),
+      );
+      if (stopFailure !== null) error.startOutcomeUnknown = true;
+      throw error;
     }
     return dispatchId;
   }
