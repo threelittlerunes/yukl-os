@@ -343,7 +343,7 @@ agents but a human can pull the task out of it. The `scope` stage may skip
 `plan` only when the skip records a decision rule.
 
 ### 4.2 `yukl run`
-<!-- status: implemented tests=tests/command-run.test.js#run --once drives one stage with the configured adapter and agent -->
+<!-- status: implemented tests=tests/engine-orca.test.js#an in-scope worker commit advances implement and anchors at the worker's HEAD -->
 
 `yukl run <task_id> [--unattended] [--once] [--cwd <dir>] [--base <git-ref>]`
 is the composition root. It loads the per-task event log, the stage machine,
@@ -373,6 +373,23 @@ whose `start` throws is recorded as a `stage_failed` and fails the run with the
 original error, unless the throw says the start's outcome itself is unknown
 (the Orca adapter's failed stop), which records a `stage_start_unknown` and
 blocks the next step instead (section 4.8).
+
+An agent stage is judged where its worker committed. When the runtime of the
+stage's adapter implements the optional `workspace(handle)` of section 4.11,
+`yukl run` reads the stage's handle from the task log's last `stage_started`
+event for that stage, resolves that checkout's `HEAD` with
+`git -C <path> rev-parse HEAD`, and uses that commit as the stage's anchor and
+as the branch that path enforcement diffs against `--base` - instead of the
+orchestrator checkout's `HEAD` and its current branch. An Orca worker commits
+in its own Git worktree, so the orchestrator's `HEAD` is the wrong commit to
+judge, and a `--base` run used to diff `base...base` (nothing) and pass an
+out-of-scope worker change silently. When the workspace or its `HEAD` cannot be
+resolved, the enforce hook refuses the stage with `R-NEEDS-HUMAN` and a
+`worker workspace unresolvable: <reason>` violation, and the anchor hook
+refuses too (`R-NO-ANCHOR`); neither ever falls back to the orchestrator's
+`HEAD`. A runtime without `workspace` - the fake adapter - keeps the previous
+behaviour exactly: the orchestrator branch is anchored and enforced, and
+enforcement still runs only when `--base` is given.
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
@@ -553,7 +570,7 @@ internally consistent but no longer contains the committed head fails that
 check even though its chain verifies.
 
 ### 4.11 The runtime adapter interface
-<!-- status: implemented tests=tests/adapter-orca.test.js#the adapter implements the runtime interface -->
+<!-- status: implemented tests=tests/adapter-orca.test.js#workspace of a foreign handle is null and calls no Orca command -->
 
 A runtime adapter implements `start`, `status`, `result` and `stop`. A `start`
 returns the runtime's handle and may throw, in which case the engine records the
@@ -565,7 +582,18 @@ string handle id`. The bundled adapters include `fake` (a scripted test
 double), `orca` (drives the Orca CLI through argument arrays) and
 `vcs-git-local` (merges through local git); `vcs-github` merges through the
 GitHub CLI, and each adapter file has its own test suite. The bundled Orca
-adapter's handle, result and base-branch shapes are specified in section 4.17.
+adapter's handle, result, base-branch and workspace shapes are specified in
+section 4.17.
+
+`workspace(handle) -> { path } | null` is optional. A runtime that implements it
+reports the checkout the agent behind `handle` actually worked in, or `null`
+when it cannot say - a foreign handle (one the adapter never produced, answered
+without calling anything), an unreadable worker record or a reply that names no
+path. The composition root uses it to judge the worker's own commit rather than
+the orchestrator checkout's (section 4.2), and blocks the stage when it cannot
+be resolved. `implementsRuntime` still requires only the four methods above, so
+an adapter without `workspace` stays a valid runtime and keeps the older
+behaviour.
 
 ### 4.12 The lifecycle directory stays adapter-neutral
 <!-- status: implemented tests=tests/runtime-neutrality.test.js#the lifecycle directory is runtime-neutral -->
@@ -714,11 +742,11 @@ not Git-branch-shaped, all refused before jj is spawned). `--json` prints the
 result object on one line instead of the human summary, so a calling hook can
 read it.
 
-### 4.17 The Orca adapter: handle, result and base branch
-<!-- status: implemented tests=tests/engine-orca.test.js#yukl run --once drives a real-adapter start to an advanced stage -->
+### 4.17 The Orca adapter: handle, result, base branch and workspace
+<!-- status: implemented tests=tests/engine-orca.test.js#an out-of-scope commit in the worker's worktree is stopped by path enforcement -->
 
 The bundled Orca adapter is the runtime that the engine drives through the
-interface of section 4.11, and four of its behaviours are load-bearing.
+interface of section 4.11, and five of its behaviours are load-bearing.
 
 **The handle is the dispatch id string.** `start` returns the Orca dispatch id
 itself - a non-empty string - and `status`, `result` and `stop` accept that
@@ -735,6 +763,24 @@ class of mistake: the engine reads `result.exitCode`, so `result` returns
 `{ exitCode: 0 }` for a `succeeded` projection and `{ exitCode: 1 }` for
 `failed`, and null while the projection is unsettled. A null result from an
 `exited` worker is treated as a refusal, not a success.
+
+**The worker's worktree is readable.** `workspace(handle)` returns the checkout
+the worker ran in, as `{ path }`, from Orca's worker record:
+`result.terminal.worktreePath` (the plain path, preferred) or the part after
+`::` of `result.worker.worktreeId` / `result.terminal.worktreeId` (the
+`<repoId>::<path>` form). It returns null on a foreign handle - answered
+without calling Orca at all - and on a non-zero exit, an `ok: false` envelope,
+an unparseable reply or a reply that names no path, so an unreadable record
+blocks the stage rather than judging the wrong checkout. A Git worktree shares
+its object store with the checkout it was added from, so a sha resolved in the
+worker's tree is readable from the orchestrator checkout, which is what lets the
+composition root anchor and enforce at the worker's commit (section 4.2).
+Experiment E6 (Orca 1.4.210, 2026-09-25) reported the worktree as the plain path
+`$.result.terminal.worktreePath` and as `<repoId>::<path>` in
+`$.result.worker.worktreeId` and `$.result.terminal.worktreeId`. The
+per-shape mapping is guarded by `workspace of a foreign handle is null and
+calls no Orca command` and the `workspace:` cases in
+`tests/adapter-orca.test.js`.
 
 `--base-branch` is emitted only when a base is known. `null`, `undefined` and
 `""` all omit the flag pair entirely, so Orca falls back to the repository's
@@ -799,6 +845,24 @@ too, and asserts the opposite outcome: the log holds `stage_starting` and
 `stage_start_unknown`, with no `stage_failed` and no `decision`, and a second
 `run --once` blocks with `R-NEEDS-HUMAN` after exactly one logged
 `worker-start`.
+
+Three more integration tests judge the commit the worker made in its own
+worktree, in a temporary repository that commits an intent at branch `main` and
+adds a second Git worktree as the worker. `an out-of-scope commit in the
+worker's worktree is stopped by path enforcement`: the worker commits a file
+outside the intent's `allowed_paths` while the orchestrator checkout stays on
+`main`, and `yukl run --once --base main` records one `enforcement` event with
+`R-PATH-SCOPE` naming the file, appends no `stage_done` for `implement`, and
+exits 1 - the diff is `main...<worker HEAD>`, where the old code diffed
+`main...main` and passed. `an in-scope worker commit advances implement and
+anchors at the worker's HEAD`: with the real anchors wiring (no anchor override)
+the worker commits inside `src/**`, the run advances `implement -> prove`, no
+`enforcement` event is recorded, and the `stage_done` anchor commit equals the
+worker's `HEAD` and not the orchestrator's. `an unresolvable worker workspace
+blocks instead of anchoring the orchestrator HEAD`: the worker record names no
+worktree path, so one `enforcement` event with `R-NEEDS-HUMAN` and a `worker
+workspace unresolvable: <reason>` violation is recorded, no `stage_done` closes
+`implement`, and the run exits 1 - with and without `--base`.
 
 ### 4.18 Known limits
 <!-- status: background -->

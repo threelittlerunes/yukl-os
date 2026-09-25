@@ -199,12 +199,18 @@ function writeRepo(dir) {
 test("yukl run --once drives a real-adapter start to an advanced stage", async () => {
   await withTempDir(async (dir) => {
     const { stateDir, logPath } = writeRepo(dir);
+    // The worker record names the checkout the worker ran in. The real adapter
+    // now reports that worktree through `workspace`, and the composition root
+    // resolves its HEAD, so a record that names no path would block the stage
+    // (see the unresolvable-workspace test below). The temp repo itself stands
+    // in for the worker's worktree here.
     const scenario = {
       "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_1" } } },
       "worker-show": {
         json: {
           ok: true,
           result: {
+            terminal: { worktreePath: dir },
             projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
           },
         },
@@ -437,4 +443,253 @@ test("a failed worker-stop over the real adapter blocks the next run instead of 
       assert.equal(stops[0][stops[0].indexOf("--dispatch") + 1], "ctx_fake_residual");
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// the worker's own commit: the anchor and path enforcement follow its worktree
+// ---------------------------------------------------------------------------
+
+/** Write `relPath` under `dir`, creating the parent directories. */
+function writeTreeFile(dir, relPath, content = "x") {
+  const target = join(dir, relPath);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content);
+}
+
+/** The 40-hex commit `ref` resolves to in the checkout at `cwd`. */
+function revParse(cwd, ref) {
+  const result = spawnSync("git", [...GIT_IDENTITY, "rev-parse", ref], { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, `git rev-parse ${ref} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+/** The intent the run enforces, written at branch `main` and read from there. */
+function workerIntent(allowedPaths) {
+  return [
+    "intent:",
+    '  goal: "A worker commit judged in its own worktree."',
+    "  scope:",
+    "    allowed_paths:",
+    ...allowedPaths.map((p) => `      - "${p}"`),
+    "consultation:",
+    "  requires_human_approval: false",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Build a temp repository whose branch `main` carries an intent for TASK, plus
+ * a second git worktree - the "worker" - branched from `main`. The worker
+ * commits there, and the fake Orca worker record reports that worktree, so the
+ * run must judge the worker's commit rather than the orchestrator checkout's
+ * (an Orca worker commits in its own worktree; see experiment E6).
+ */
+function writeWorkerRepo(dir, { allowedPaths }) {
+  mkdirSync(join(dir, "scripts", "adapters"), { recursive: true });
+  writeFileSync(join(dir, "scripts", "adapters", "orca.js"), ORCA_ADAPTER_SHIM);
+  writeFileSync(join(dir, "scripts", "adapters", "vcs-github.js"), VCS_ADAPTER);
+  writeFileSync(join(dir, "yukl.config.json"), `${JSON.stringify(BASE_CONFIG, null, 2)}\n`);
+  writeFileSync(
+    join(dir, "yukl.policy.json"),
+    readFileSync(join(ROOT, "yukl.policy.json"), "utf8"),
+  );
+  mkdirSync(join(dir, ".orchestration", "intents"), { recursive: true });
+  writeFileSync(join(dir, ".orchestration", "intents", `${TASK}.yml`), workerIntent(allowedPaths));
+  git(["-c", "init.defaultBranch=main", "init", "-q"], dir);
+  git(["add", "-A"], dir);
+  git(["commit", "-q", "-m", "seed"], dir);
+
+  const stateDir = join(dir, ".orchestration", "state");
+  for (const [stage, to] of SEED_TO_IMPLEMENT) {
+    appendEvent(stateDir, TASK, {
+      type: "stage_done",
+      actor: SEED_ACTORS[stage] ?? "seed",
+      anchor: { path: `${stage}.md`, commit: SEED_COMMIT },
+      data: { stage, to },
+    });
+  }
+
+  const workerDir = join(dir, ".orchestration", "worker");
+  git(["worktree", "add", "-q", "-b", "worker", workerDir], dir);
+  return { stateDir, logPath: join(dir, "calls.log"), workerDir };
+}
+
+/** The worker record that names `worktreeDir` as the checkout the worker ran in. */
+function workerShown(worktreeDir) {
+  return {
+    json: {
+      ok: true,
+      result: {
+        terminal: { worktreePath: worktreeDir },
+        projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
+      },
+    },
+  };
+}
+
+test("an out-of-scope commit in the worker's worktree is stopped by path enforcement", async () => {
+  await withTempDir(async (dir) => {
+    const { stateDir, logPath, workerDir } = writeWorkerRepo(dir, { allowedPaths: ["src/**"] });
+    // The worker commits outside the intent's allowed_paths. The orchestrator
+    // checkout stays on `main`, so enforcement against its branch would diff
+    // `main...main` - nothing - and pass silently.
+    writeTreeFile(workerDir, "outside/evil.js");
+    git(["add", "-A"], workerDir);
+    git(["commit", "-q", "-m", "out of scope"], workerDir);
+    const workerHead = revParse(workerDir, "HEAD");
+
+    const scenario = {
+      "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_worker" } } },
+      // The id form exercises the `<repoId>::<path>` fallback of the adapter.
+      "worker-show": {
+        json: {
+          ok: true,
+          result: {
+            worker: { worktreeId: `repo_1::${workerDir}` },
+            projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
+          },
+        },
+      },
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      const overrides = runOverrides();
+      const first = await capture(() => run([TASK, "--once", "--cwd", dir], overrides));
+      assert.equal(first.code, 0, first.err);
+      assert.match(first.out, /yukl run: started at implement/);
+
+      const second = await capture(() =>
+        run([TASK, "--once", "--base", "main", "--cwd", dir], overrides),
+      );
+      assert.equal(second.code, 1, "an out-of-scope worker commit is not a clean step");
+      assert.match(second.out, /R-PATH-SCOPE/);
+      assert.doesNotMatch(second.out, /advanced/);
+
+      const events = readEvents(stateDir, TASK).events;
+      const enforcement = events.filter((event) => event.type === "enforcement");
+      assert.equal(enforcement.length, 1, "one enforcement event is recorded");
+      assert.equal(enforcement[0].data.stage, "implement");
+      assert.equal(enforcement[0].data.rule, "R-PATH-SCOPE");
+      assert.ok(
+        enforcement[0].data.violations.some((v) =>
+          /outside\/evil\.js matches no allowed_paths/.test(v),
+        ),
+        JSON.stringify(enforcement[0].data.violations),
+      );
+      assert.equal(
+        events.some((event) => event.type === "stage_done" && event.data.stage === "implement"),
+        false,
+        "implement is never closed over an out-of-scope worker commit",
+      );
+      assert.equal(revParse(workerDir, "HEAD"), workerHead, "the worker HEAD is the judged commit");
+    });
+  });
+});
+
+test("an in-scope worker commit advances implement and anchors at the worker's HEAD", async () => {
+  await withTempDir(async (dir) => {
+    const { stateDir, logPath, workerDir } = writeWorkerRepo(dir, { allowedPaths: ["src/**"] });
+    writeTreeFile(workerDir, "src/allowed/worker.js");
+    git(["add", "-A"], workerDir);
+    git(["commit", "-q", "-m", "in scope"], workerDir);
+    const workerHead = revParse(workerDir, "HEAD");
+    const orchestratorHead = revParse(dir, "HEAD");
+    assert.notEqual(workerHead, orchestratorHead, "the worker and orchestrator HEADs differ");
+
+    const scenario = {
+      "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_worker" } } },
+      "worker-show": workerShown(workerDir),
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      // The real anchors wiring is the subject here, so the anchor override the
+      // other integration tests use is dropped: the run must resolve the
+      // worker's HEAD itself.
+      const overrides = runOverrides();
+      delete overrides.anchors;
+
+      const first = await capture(() =>
+        run([TASK, "--once", "--base", "main", "--cwd", dir], overrides),
+      );
+      assert.equal(first.code, 0, first.err);
+      assert.match(first.out, /yukl run: started at implement/);
+
+      const second = await capture(() =>
+        run([TASK, "--once", "--base", "main", "--cwd", dir], overrides),
+      );
+      assert.equal(second.code, 0, second.err);
+      assert.match(second.out, /yukl run: advanced/);
+      assert.match(second.out, /implement -> prove/);
+
+      const events = readEvents(stateDir, TASK).events;
+      assert.equal(
+        events.some((event) => event.type === "enforcement"),
+        false,
+        "an in-scope worker commit passes path enforcement",
+      );
+      const done = events.filter(
+        (event) => event.type === "stage_done" && event.data.to === "prove",
+      );
+      assert.equal(done.length, 1, "exactly one stage_done moves implement to prove");
+      assert.equal(done[0].data.stage, "implement");
+      assert.equal(
+        done[0].anchor.commit,
+        workerHead,
+        "the anchor is the commit the worker made in its own worktree",
+      );
+      assert.notEqual(done[0].anchor.commit, orchestratorHead);
+    });
+  });
+});
+
+test("an unresolvable worker workspace blocks instead of anchoring the orchestrator HEAD", async () => {
+  for (const base of [null, "main"]) {
+    await withTempDir(async (dir) => {
+      const { stateDir, logPath } = writeWorkerRepo(dir, { allowedPaths: ["src/**"] });
+      // The worker record names no worktree at all: no terminal.worktreePath and
+      // no worktreeId carrying a path. The run must block for a human rather
+      // than anchor the orchestrator checkout's HEAD.
+      const scenario = {
+        "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_nowhere" } } },
+        "worker-show": {
+          json: {
+            ok: true,
+            result: {
+              projection: { liveness: { verdict: "exited" }, outcome: "succeeded" },
+            },
+          },
+        },
+      };
+
+      await withFakeOrca({ scenario, logPath }, async () => {
+        const overrides = runOverrides();
+        const args = [TASK, "--once", "--cwd", dir];
+        if (base !== null) args.push("--base", base);
+
+        const first = await capture(() => run(args, overrides));
+        assert.equal(first.code, 0, first.err);
+        assert.match(first.out, /yukl run: started at implement/);
+
+        const second = await capture(() => run(args, overrides));
+        assert.equal(second.code, 1, `base ${base}: a blocked stage is not a clean step`);
+        assert.match(second.out, /R-NEEDS-HUMAN/);
+        assert.doesNotMatch(second.out, /advanced/);
+
+        const events = readEvents(stateDir, TASK).events;
+        const enforcement = events.filter((event) => event.type === "enforcement");
+        assert.equal(enforcement.length, 1, `base ${base}: one enforcement event is recorded`);
+        assert.equal(enforcement[0].data.stage, "implement");
+        assert.equal(enforcement[0].data.rule, "R-NEEDS-HUMAN");
+        assert.ok(
+          enforcement[0].data.violations.some((v) => /worker workspace unresolvable: /.test(v)),
+          JSON.stringify(enforcement[0].data.violations),
+        );
+        assert.equal(
+          events.some((event) => event.type === "stage_done" && event.data.stage === "implement"),
+          false,
+          `base ${base}: implement is never anchored at the orchestrator HEAD`,
+        );
+      });
+    });
+  }
 });

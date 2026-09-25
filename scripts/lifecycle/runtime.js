@@ -4,9 +4,9 @@
 // A runtime adapter is the seam between the lifecycle runner and whatever
 // actually executes a pipeline stage: a local process, a coding agent CLI, a
 // remote executor or a test double. The runner talks to an adapter only
-// through the four methods below, so the lifecycle directory stays free of any
-// single agent's vocabulary and of hard imports of a particular adapter (see
-// tests/runtime-neutrality.test.js).
+// through the four required methods below, so the lifecycle directory stays
+// free of any single agent's vocabulary and of hard imports of a particular
+// adapter (see tests/runtime-neutrality.test.js).
 //
 // Interface:
 //
@@ -24,6 +24,15 @@
 //   stop(handle) -> void
 //     Ask the agent to stop. The adapter may ignore the request once the
 //     handle has already exited.
+//   workspace(handle) -> { path } | null          (optional)
+//     The checkout the agent for `handle` actually worked in, or null when
+//     this adapter cannot say. Implementing it opts the composition root into
+//     judging the worker's own commit: `yukl run` resolves that checkout's HEAD
+//     and anchors the completed stage and runs path enforcement there instead
+//     of at the orchestrator checkout's HEAD and branch. A foreign handle, an
+//     unreadable worker record or a reply that names no path yields null - the
+//     caller blocks for a human rather than falling back to the wrong commit. A
+//     runtime without this method keeps the older behaviour unchanged.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,7 +47,9 @@ const RUNTIME_METHODS = ["start", "status", "result", "stop"];
 
 /**
  * True when `candidate` is a non-null object exposing every runtime method as
- * a function. Purely structural: it checks the shape, never any behaviour.
+ * a function. Purely structural: it checks the shape, never any behaviour. The
+ * optional `workspace` method is not required here, so an adapter that does not
+ * implement it is still a runtime.
  */
 export function implementsRuntime(candidate) {
   return (

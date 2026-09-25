@@ -126,6 +126,20 @@ in a hash-chained log:
   is a start whose residual worker could not be proven stopped: it is recorded
   as `stage_start_unknown`, gets no diagnosis, and blocks the next step like a
   crash, so it is never retried while that worker may still be live.
+
+  An agent stage is judged where its worker committed. When the stage's runtime
+  adapter implements the optional `workspace(handle)` - the Orca adapter does,
+  reading the worker's worktree from Orca's worker record - `yukl run` resolves
+  that checkout's `HEAD` through `git -C <path> rev-parse HEAD` and uses it as
+  the stage's anchor and as the branch path enforcement diffs against `--base`,
+  instead of the orchestrator checkout's `HEAD` and current branch. An Orca
+  worker commits in its own Git worktree, so the orchestrator's `HEAD` is the
+  wrong commit to judge; a worker record that names no worktree path, or a
+  `HEAD` that does not resolve, blocks the stage with `R-NEEDS-HUMAN` and one
+  `enforcement` event carrying `worker workspace unresolvable: <reason>` rather
+  than anchoring the wrong commit. A runtime without `workspace` - the fake
+  adapter - keeps the previous behaviour: path enforcement still runs on the
+  orchestrator's branch, and only when `--base` is given.
 - `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
   working copy `@` of a colocated Jujutsu workspace as the Git branch `yukl-wc`
   (or `--bookmark`), so a worker can be branched from the state the human has on
