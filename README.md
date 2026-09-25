@@ -130,9 +130,11 @@ in a hash-chained log:
   An agent stage is judged where its worker committed. When the stage's runtime
   adapter implements the optional `workspace(handle)` - the Orca adapter does,
   reading the worker's worktree from Orca's worker record - `yukl run` resolves
-  that checkout's `HEAD` through `git -C <path> rev-parse HEAD` and uses it as
-  the stage's anchor and as the branch path enforcement diffs against `--base`,
-  instead of the orchestrator checkout's `HEAD` and current branch. An Orca
+  that checkout's `HEAD` through `git -C <path> rev-parse HEAD`, anchors the
+  stage at the last commit touching the task's contract in that checkout
+  (falling back to that `HEAD` when no commit there touches it), and diffs
+  that `HEAD` against `--base` for path enforcement - instead of the
+  orchestrator checkout's `HEAD` and current branch. An Orca
   worker commits in its own Git worktree, so the orchestrator's `HEAD` is the
   wrong commit to judge; a worker record that names no worktree path, or a
   `HEAD` that does not resolve, blocks the stage with `R-NEEDS-HUMAN` and one

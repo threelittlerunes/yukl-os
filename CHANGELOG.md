@@ -277,15 +277,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   part after `::` of `result.worker.worktreeId` /
   `result.terminal.worktreeId`). When the stage's runtime implements it,
   `yukl run` reads the stage's handle from the log, resolves
-  `git -C <path> rev-parse HEAD`, and uses that commit as the stage's anchor
-  and as the branch path enforcement diffs against `--base`. A workspace or
+  `git -C <path> rev-parse HEAD`, and anchors the stage at the last commit
+  touching the task's contract in that checkout - falling back to that `HEAD`
+  when no commit there touches the contract - while path enforcement diffs
+  that `HEAD` against `--base`. A workspace or
   `HEAD` that cannot be resolved refuses the stage with `R-NEEDS-HUMAN` and a
   `worker workspace unresolvable: <reason>` violation, and the anchor refuses
   too, so neither ever falls back to the orchestrator's `HEAD`; a runtime
   without `workspace` (the fake adapter) keeps the previous behaviour. Guarded
   by `an out-of-scope commit in the worker's worktree is stopped by path
   enforcement`, `an in-scope worker commit advances implement and anchors at
-  the worker's HEAD`, `an unresolvable worker workspace blocks instead of
+  the worker's HEAD`, `the anchor is the worker's contract commit, not the
+  orchestrator's`, `an unresolvable worker workspace blocks instead of
   anchoring the orchestrator HEAD` and `workspace of a foreign handle is null
   and calls no Orca command` (ha-11).
 - `.gitignore` now ignores the lock broker's reclaim guard

@@ -28,6 +28,7 @@ import { appendEvent, readEvents } from "../scripts/lifecycle/events.js";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_ORCA = join(ROOT, "tests", "fixtures", "fake-orca", "fake-orca.js");
 const TASK = "task-orca";
+const CONTRACT_PATH = `.orchestration/contracts/${TASK}.json`;
 const SEED_COMMIT = "a".repeat(40);
 const GIT_IDENTITY = ["-c", "user.email=yukl-test@example.invalid", "-c", "user.name=Yukl Test"];
 
@@ -477,14 +478,31 @@ function workerIntent(allowedPaths) {
   ].join("\n");
 }
 
+/** A contract body for `filesTouched`; two calls with different lists differ. */
+function contractBody(filesTouched) {
+  return `${JSON.stringify(
+    {
+      task_id: TASK,
+      empirical_proof: [{ command: "npm run test", expected_exit_code: 0 }],
+      files_touched: filesTouched,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 /**
  * Build a temp repository whose branch `main` carries an intent for TASK, plus
  * a second git worktree - the "worker" - branched from `main`. The worker
  * commits there, and the fake Orca worker record reports that worktree, so the
  * run must judge the worker's commit rather than the orchestrator checkout's
  * (an Orca worker commits in its own worktree; see experiment E6).
+ *
+ * `orchestratorContract` commits that contract text on `main` in its own
+ * commit before the worktree branches off, so the orchestrator checkout has a
+ * contract commit of its own to be mistaken for the worker's.
  */
-function writeWorkerRepo(dir, { allowedPaths }) {
+function writeWorkerRepo(dir, { allowedPaths, orchestratorContract = null }) {
   mkdirSync(join(dir, "scripts", "adapters"), { recursive: true });
   writeFileSync(join(dir, "scripts", "adapters", "orca.js"), ORCA_ADAPTER_SHIM);
   writeFileSync(join(dir, "scripts", "adapters", "vcs-github.js"), VCS_ADAPTER);
@@ -498,6 +516,12 @@ function writeWorkerRepo(dir, { allowedPaths }) {
   git(["-c", "init.defaultBranch=main", "init", "-q"], dir);
   git(["add", "-A"], dir);
   git(["commit", "-q", "-m", "seed"], dir);
+
+  if (orchestratorContract !== null) {
+    writeTreeFile(dir, CONTRACT_PATH, orchestratorContract);
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "the orchestrator's own contract commit"], dir);
+  }
 
   const stateDir = join(dir, ".orchestration", "state");
   for (const [stage, to] of SEED_TO_IMPLEMENT) {
@@ -638,6 +662,84 @@ test("an in-scope worker commit advances implement and anchors at the worker's H
         "the anchor is the commit the worker made in its own worktree",
       );
       assert.notEqual(done[0].anchor.commit, orchestratorHead);
+    });
+  });
+});
+
+test("the anchor is the worker's contract commit, not the orchestrator's", async () => {
+  await withTempDir(async (dir) => {
+    // Three distinct commits, so the anchor names exactly one of them. The
+    // orchestrator branch carries a contract for the same task (an older one),
+    // the worker commits its own contract, and then one more in-scope commit
+    // that leaves the contract untouched - so the worker's HEAD is not the
+    // commit that touched it.
+    const { stateDir, logPath, workerDir } = writeWorkerRepo(dir, {
+      allowedPaths: ["src/**"],
+      orchestratorContract: contractBody(["src/orchestrator-old.js"]),
+    });
+    const orchestratorContract = revParse(dir, "HEAD");
+
+    writeTreeFile(workerDir, CONTRACT_PATH, contractBody(["src/allowed/worker.js"]));
+    git(["add", "-A"], workerDir);
+    git(["commit", "-q", "-m", "the worker's contract"], workerDir);
+    const workerContract = revParse(workerDir, "HEAD");
+    writeTreeFile(workerDir, "src/allowed/after-the-contract.js");
+    git(["add", "-A"], workerDir);
+    git(["commit", "-q", "-m", "work after the contract"], workerDir);
+    const workerHead = revParse(workerDir, "HEAD");
+
+    assert.notEqual(
+      orchestratorContract,
+      workerContract,
+      "the orchestrator and the worker each have a contract commit of their own",
+    );
+    assert.notEqual(workerHead, workerContract, "the worker HEAD is not its contract commit");
+
+    const scenario = {
+      "worker-start": { json: { ok: true, result: { dispatchId: "ctx_fake_worker" } } },
+      "worker-show": workerShown(workerDir),
+    };
+
+    await withFakeOrca({ scenario, logPath }, async () => {
+      // The real anchors wiring is the subject, so the anchor stub the other
+      // integration tests inject is dropped.
+      const overrides = runOverrides();
+      delete overrides.anchors;
+
+      const first = await capture(() =>
+        run([TASK, "--once", "--base", "main", "--cwd", dir], overrides),
+      );
+      assert.equal(first.code, 0, first.err);
+      assert.match(first.out, /yukl run: started at implement/);
+
+      const second = await capture(() =>
+        run([TASK, "--once", "--base", "main", "--cwd", dir], overrides),
+      );
+      assert.equal(second.code, 0, second.err);
+      assert.match(second.out, /yukl run: advanced/);
+      assert.match(second.out, /implement -> prove/);
+
+      const events = readEvents(stateDir, TASK).events;
+      const done = events.filter(
+        (event) => event.type === "stage_done" && event.data.to === "prove",
+      );
+      assert.equal(done.length, 1, "exactly one stage_done moves implement to prove");
+      assert.equal(done[0].anchor.path, CONTRACT_PATH);
+      assert.equal(
+        done[0].anchor.commit,
+        workerContract,
+        "the last commit touching the contract in the worker's checkout is the anchor",
+      );
+      assert.notEqual(
+        done[0].anchor.commit,
+        orchestratorContract,
+        "the orchestrator's own contract commit is not the anchor",
+      );
+      assert.notEqual(
+        done[0].anchor.commit,
+        workerHead,
+        "the worker's HEAD is not the anchor, because it does not touch the contract",
+      );
     });
   });
 });
