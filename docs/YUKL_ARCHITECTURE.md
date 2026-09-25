@@ -665,13 +665,19 @@ back to the default - the worktree was created from `refs/remotes/origin/main` -
 but that empty-string behaviour is undocumented, so the adapter does not depend
 on it.
 
-The regression guard is an integration test over the real composition root:
-`yukl run --once` in a temporary repository whose lifecycle block routes
-`implement` to the Orca adapter and the fake CLI starts exactly one worker,
-records the dispatch id as the handle, and then advances `implement -> prove`
-once `worker-show` reports the worker exited with a `succeeded` outcome.
-Restoring the shipped `{ dispatchId }` return makes that test fail with
-`runtime.start must return a non-empty string handle id`.
+The regression guard is a pair of integration tests over the real composition
+root: `yukl run --once` in a temporary repository whose lifecycle block routes
+`implement` to the Orca adapter. The first - `yukl run --once drives a
+real-adapter start to an advanced stage` - starts exactly one worker, records
+the dispatch id as the handle, and then advances `implement -> prove` once
+`worker-show` reports the worker exited with a `succeeded` outcome; restoring
+the shipped `{ dispatchId }` return makes it fail with `runtime.start must
+return a non-empty string handle id`. The second - `an exited worker with no
+settled outcome is refused, not advanced` - reports an `exited` worker whose
+outcome is neither `succeeded` nor `failed`, and asserts the poll becomes a
+refusal instead: the step prints `failed at implement`, no `stage_done` closes
+`implement`, exactly one `stage_failed` records the `runtimeRefused`
+observation, and no second worker is started.
 
 ### 4.17 Known limits
 <!-- status: background -->
