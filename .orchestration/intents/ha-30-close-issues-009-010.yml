@@ -1,0 +1,25 @@
+intent:
+  goal: "Close two follow-ups from the ha-08 audit. (1) `yukl decide approve` persists the stage it re-affirms as `data.stage` on its `human_decision` event, so an approval clears an unknown start (a `stage_starting` with no recorded outcome) for that stage exactly as `yukl decide override --to <stage>` does; approve still moves no stage. (2) `docs/SDLC_PLAN.md` cites the architecture sections that exist after the ha-08 renumbering: the scheduler is section 4.14, not 4.13. The architecture doc's start-safety section and the CHANGELOG state the new approve behaviour, and a test proves that an approval lets the next step start the stage once."
+  depends_on:
+    - "ha-08-engine-start-safety"
+  scope:
+    allowed_paths:
+      - "scripts/commands/decide.js"
+      - "tests/command-decide.test.js"
+      - "tests/lifecycle-engine.test.js"
+      - "docs/SDLC_PLAN.md"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-30-close-issues-009-010.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/lifecycle/**"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+
+consultation:
+  requires_human_approval: false
