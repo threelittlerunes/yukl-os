@@ -129,7 +129,9 @@ in a hash-chained log:
   a conflicted, unreadable or remote-tracking bookmark, a custom bookmark that
   does not already point at `@`, or a Git ref that does not resolve to the
   exported commit. A plain Git repository is left alone (exit 0, nothing to
-  publish).
+  publish). A run that knows no base tells Orca to use the repository's default
+  base by omitting `--base-branch` from `worker-start` entirely, never by
+  passing an empty string.
 - `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended,
   each in its own worktree under `.orchestration/worktrees/`. Tasks whose
   intents' `allowed_paths` cannot overlap run in the same wave, in parallel;

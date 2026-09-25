@@ -1,0 +1,16 @@
+{
+  "task_id": "ha-06-adapter-handle-contract",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/ha-06-adapter-handle-contract.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "scripts/adapters/orca.js",
+    "tests/adapter-orca.test.js",
+    "tests/engine-orca.test.js"
+  ]
+}
