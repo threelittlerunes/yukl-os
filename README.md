@@ -118,6 +118,18 @@ in a hash-chained log:
   limits bound an attended run in the same way - a breach appends the same
   `enforcement` event and stops the run - so `--unattended` changes only how the
   loop behaves between steps.
+- `yukl vcs-sync [--cwd <dir>] [--bookmark <name>] [--json]` publishes the
+  working copy `@` of a colocated Jujutsu workspace as the Git branch `yukl-wc`
+  (or `--bookmark`), so a worker can be branched from the state the human has on
+  disk; it never edits `@` or its description. `yukl run` does the same before
+  every agent start, and the worker branches from that ref even when `--base` is
+  given - `--base` governs the config, policy, enforcement and merge target the
+  run reads, not where the worker starts. It fails closed while Jujutsu cannot
+  prove the state: a `.jj` at or above the working directory that jj cannot read,
+  a conflicted, unreadable or remote-tracking bookmark, a custom bookmark that
+  does not already point at `@`, or a Git ref that does not resolve to the
+  exported commit. A plain Git repository is left alone (exit 0, nothing to
+  publish).
 - `yukl schedule <task_id>... [--base <ref>]` drives several tasks unattended,
   each in its own worktree under `.orchestration/worktrees/`. Tasks whose
   intents' `allowed_paths` cannot overlap run in the same wave, in parallel;
@@ -132,6 +144,14 @@ in a hash-chained log:
   it however the command ends, and a lock whose recorded process is gone is
   reclaimed by the next acquirer under an exclusive `<name>.lock.reclaim`
   guard, so two acquirers can never both hold it.
+- `yukl render <stage-id> [--config <path>] [--task-id <id>]` prints one stage's
+  prompt with `{out}`, `{reads}` and `<task_id>` substituted, so a stage can be
+  inspected without running an agent.
+- `yukl verify [<contract-path>...] [--base <ref>]` runs the Rational Persuasion
+  gate: it executes each contract's proof commands from the allowlist and
+  enforces that contract's `files_touched` against the task intent, reading the
+  allowlist and the intents from `<base>` through `git show` when given, so a
+  pull request cannot widen its own scope.
 - `yukl status <task_id> [--state-dir <dir>] [--base <ref>]` folds the log to
   its state, prints the last decision, verifies the hash chain and checks the
   log against the newest `Yukl-Run-Head` trailer on the base branch.
@@ -139,6 +159,9 @@ in a hash-chained log:
   --reason <text>` records a human decision; it is refused while
   `YUKL_DISPATCH_ID` is set, so a dispatched agent cannot impersonate the
   human.
+- `yukl init [--cwd <dir>] [--force] [--yukl-pin <sha>]` installs the harness
+  into a project rather than driving a task, so Quick Start section 2 documents
+  it.
 
 Which transitions may advance without a human is set by `yukl.policy.json`, and
 the per-task state lives under `.orchestration/state/` (git-ignored). The full
