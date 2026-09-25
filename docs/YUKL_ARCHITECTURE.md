@@ -498,7 +498,10 @@ start a second worker beside a live one.
 
 A `stage_starting` is not an agent start. The run's start limit still counts
 only the `stage_started` events the run appended (section 4.7), so an unknown or
-refused start consumes nothing.
+refused start consumes nothing - guarded by `a start whose outcome is unknown
+does not spend the agent-start limit`, where a run with
+`maxAgentStartsPerRun: 1` still starts after a recorded unknown start and the
+refusal names the following stage.
 
 ### 4.9 The event log
 <!-- status: implemented tests=tests/lifecycle-events.test.js#editing any byte of an earlier line makes verifyChain fail naming that line -->
