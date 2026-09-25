@@ -251,7 +251,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Scheduled artifact purge implementing the retention policy in
   `.orchestration/artifacts/README.md`.
 - GitHub Action implementing the Phase 5 feedback loop (see `docs/SDLC_PLAN.md`).
-- Phase 3 autonomous loop scheduling.
+- Phase 3 trigger layer: cron or overnight triggering and the PR-babysitting
+  loops (the unattended loop and `yukl schedule` shipped in v3-unattended).
 
 ## [2.1.0] - 2026-09-22
 
