@@ -733,6 +733,46 @@ test("a human_decision naming the stage clears the unknown start so the next ste
   });
 });
 
+test("a start whose outcome is unknown does not spend the agent-start limit", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-limit";
+    // A previous run opened a start and recorded its failure.
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom" },
+    });
+    appendEvent(dir, taskId, {
+      type: "stage_failed",
+      actor: "engine",
+      data: { stage: "intent", runtime: "boom", observation: { startError: "boom" } },
+    });
+
+    const runtime = countingRuntime();
+    const result = await runUntilBlocked({
+      taskId,
+      deps: makeDeps(dir, { runtime: () => runtime }),
+      maxSteps: 64,
+      limits: { maxWallMinutesPerRun: 60, maxAgentStartsPerRun: 1 },
+    });
+
+    // The limit counts this run's `stage_started` events only, so the recorded
+    // unknown start does not spend it: intent starts, and the refusal names the
+    // next stage.
+    assert.equal(result.status, "limit");
+    assert.deepEqual(result.limit, { name: RUN_LIMITS.STARTS, max: 1, observed: 1 });
+    assert.equal(result.stage, "scope");
+    assert.equal(runtime.startCount, 1, "the failed start left the limit unspent");
+    const started = readEvents(dir, taskId).events.filter(
+      (event) => event.type === "stage_started",
+    );
+    assert.deepEqual(
+      started.map((event) => event.data.stage),
+      ["intent"],
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // replay honours reopen and human_decision events from the log
 // ---------------------------------------------------------------------------
