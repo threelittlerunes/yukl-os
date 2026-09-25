@@ -1,0 +1,28 @@
+intent:
+  goal: "One spec source for both control planes. A new command `yukl spec <task_id> [--stage <stage>] [--base <git-ref>] [--dispatch-id <id>] [--cwd <dir>]` renders the drafter spec from `templates/drafter-spec.md` and the task's intent read at the base ref: the intent path, the intent goal as the deliverable, the allowed and forbidden paths, the tests and docs requirements, the contract rule and the exact verify command. `yukl run` hands the same rendered text to the runtime as the stage spec, ending with a line `YUKL_DISPATCH_ID: <id>`, where the id is assigned by the engine per start and also recorded on the `stage_started` event. A task whose intent cannot be read at the base is refused before any runtime starts."
+  depends_on:
+    - "ha-11-worker-commit-judging"
+  scope:
+    allowed_paths:
+      - "scripts/commands/spec.js"
+      - "scripts/commands/run.js"
+      - "scripts/lifecycle/engine.js"
+      - "templates/drafter-spec.md"
+      - "tests/command-spec.test.js"
+      - "tests/command-run.test.js"
+      - "tests/lifecycle-engine.test.js"
+      - "tests/fixtures/spec/**"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-12-spec-command.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/yukl.js"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+consultation:
+  requires_human_approval: false
