@@ -1,0 +1,29 @@
+intent:
+  goal: "`yukl run` judges the work the Orca worker actually committed. A runtime adapter may implement an optional `workspace(handle) -> { path } | null`; the Orca adapter reads the worker's worktree path from Orca's worker record (`resource.worktreeId`, `<repoId>::<path>`). For an agent stage whose runtime reports a workspace, `yukl run` resolves the worker's HEAD commit there and uses it for the stage's anchor and for path enforcement, instead of the orchestrator checkout's HEAD and branch. When a runtime implements `workspace` but it cannot be resolved, the stage blocks with R-NEEDS-HUMAN instead of anchoring to the wrong commit. Runtimes without `workspace` (the fake adapter) keep today's behaviour."
+  depends_on:
+    - "ha-08-engine-start-safety"
+  scope:
+    allowed_paths:
+      - "scripts/adapters/orca.js"
+      - "scripts/lifecycle/runtime.js"
+      - "scripts/commands/run.js"
+      - "tests/adapter-orca.test.js"
+      - "tests/command-run.test.js"
+      - "tests/engine-orca.test.js"
+      - "tests/fixtures/fake-orca/**"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-11-worker-commit-judging.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/lifecycle/engine.js"
+      - "scripts/lifecycle/enforce.js"
+      - "scripts/lifecycle/anchors.js"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+consultation:
+  requires_human_approval: false
