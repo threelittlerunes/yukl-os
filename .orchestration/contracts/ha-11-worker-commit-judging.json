@@ -13,6 +13,7 @@
     "scripts/commands/run.js",
     "scripts/lifecycle/runtime.js",
     "tests/adapter-orca.test.js",
+    "tests/command-run.test.js",
     "tests/engine-orca.test.js"
   ]
 }

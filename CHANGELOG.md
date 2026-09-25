@@ -284,13 +284,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `HEAD` that cannot be resolved refuses the stage with `R-NEEDS-HUMAN` and a
   `worker workspace unresolvable: <reason>` violation, and the anchor refuses
   too, so neither ever falls back to the orchestrator's `HEAD`; a runtime
-  without `workspace` (the fake adapter) keeps the previous behaviour. Guarded
-  by `an out-of-scope commit in the worker's worktree is stopped by path
+  without `workspace` (the fake adapter) keeps the previous behaviour, which
+  `a runtime without workspace is not path-enforced without --base` guards.
+  Guarded by `an out-of-scope commit in the worker's worktree is stopped by path
   enforcement`, `an in-scope worker commit advances implement and anchors at
   the worker's HEAD`, `the anchor is the worker's contract commit, not the
   orchestrator's`, `an unresolvable worker workspace blocks instead of
-  anchoring the orchestrator HEAD` and `workspace of a foreign handle is null
-  and calls no Orca command` (ha-11).
+  anchoring the orchestrator HEAD`, `a runtime without workspace stops an
+  out-of-scope commit on the task branch`, `a runtime without workspace anchors
+  at the task branch's contract commit` and `workspace of a foreign handle is
+  null and calls no Orca command` (ha-11).
 - `.gitignore` now ignores the lock broker's reclaim guard
   (`.orchestration/locks/*.lock.reclaim`), so a reclaimer that crashed
   mid-reclaim no longer leaves an untracked file in the working tree (v3-docs).

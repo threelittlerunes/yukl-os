@@ -391,7 +391,12 @@ resolved, the enforce hook refuses the stage with `R-NEEDS-HUMAN` and a
 refuses too (`R-NO-ANCHOR`); neither ever falls back to the orchestrator's
 `HEAD`. A runtime without `workspace` - the fake adapter - keeps the previous
 behaviour exactly: the orchestrator branch is anchored and enforced, and
-enforcement still runs only when `--base` is given.
+enforcement still runs only when `--base` is given. That fallback is guarded by
+`a runtime without workspace stops an out-of-scope commit on the task branch`,
+`a runtime without workspace is not path-enforced without --base` and
+`a runtime without workspace anchors at the task branch's contract commit`
+(`tests/command-run.test.js`), which drive `yukl run` with a runtime that
+implements no `workspace` and inject neither hook.
 
 ### 4.3 `yukl status`
 <!-- status: implemented tests=tests/command-status.test.js#an untouched log with a committed head exits 0 and reports its uncommitted tail -->
