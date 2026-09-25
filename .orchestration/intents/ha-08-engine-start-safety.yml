@@ -1,0 +1,27 @@
+intent:
+  goal: "A throwing or failed start never leaves an unrecorded worker, and a retry never starts a second live one. The engine appends a `stage_starting` event (stage, runtime) before it calls `runtime.start`. If `start` throws, the engine records `stage_failed` with the error and runs the diagnosis as for any failure. On a later step, a `stage_starting` with no following `stage_started`, `stage_failed` or `human_decision` for that stage means a start whose outcome is unknown (a crash between the call and the record): the engine blocks with R-NEEDS-HUMAN and starts nothing. The Orca adapter, when `worker-start` fails and its reply names a dispatch id, calls `worker-stop` on it before throwing, and includes the id and Orca's `residualResources` in the error."
+  depends_on:
+    - "ha-06-adapter-handle-contract"
+  scope:
+    allowed_paths:
+      - "scripts/lifecycle/engine.js"
+      - "scripts/adapters/orca.js"
+      - "tests/lifecycle-engine.test.js"
+      - "tests/adapter-orca.test.js"
+      - "tests/engine-orca.test.js"
+      - "tests/fixtures/fake-orca/**"
+      - "README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-08-engine-start-safety.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "scripts/lifecycle/stages.js"
+      - "scripts/commands/**"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+consultation:
+  requires_human_approval: false
