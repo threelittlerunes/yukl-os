@@ -21,6 +21,15 @@
 // engine reads `result.exitCode`, so the numeric shape is what a successful
 // stage is proven by.
 //
+// `workspace` implements the optional method of the runtime interface: it runs
+// `worker-show --dispatch <handle> --json` and returns `{ path }` from the
+// worker record - the plain path `result.terminal.worktreePath`, or the part
+// after "::" of `result.worker.worktreeId` / `result.terminal.worktreeId` -
+// and null on a foreign handle (answered without calling Orca), a non-zero
+// exit, an `ok: false` envelope, an unparseable reply or a reply that names no
+// path. The composition root uses it to judge the commit the worker made in its
+// own worktree instead of the orchestrator checkout's HEAD.
+//
 // `--base-branch` is omitted from worker-start entirely when no base is known
 // (null, undefined or an empty string), because Orca documents omitting the
 // flag as "use the repo default base". Experiment E6 (Orca 1.4.210,
@@ -315,5 +324,35 @@ export function createOrcaRuntime({ orca = "orca", agent, baseBranch, name = nul
     run(prefix, ["orchestration", "worker-stop", "--dispatch", handle, "--json"]);
   }
 
-  return { start, status, result, stop };
+  /**
+   * The worker's worktree, as the optional `workspace` method of the runtime
+   * interface. `worker-show --dispatch <handle> --json` reports it as the plain
+   * path `result.terminal.worktreePath` and as `<repoId>::<path>` in
+   * `result.worker.worktreeId` and `result.terminal.worktreeId`; the plain path
+   * is preferred and the id's part after "::" is the fallback. A foreign handle
+   * - anything that is not a non-empty string - is refused without calling
+   * Orca. A non-zero exit, an `ok: false` envelope, an unparseable reply and a
+   * reply that names no path each yield null, so the caller blocks rather than
+   * judging a checkout this adapter could not identify.
+   */
+  function workspace(handle) {
+    if (typeof handle !== "string" || handle === "") return null;
+    const shown = run(prefix, ["orchestration", "worker-show", "--dispatch", handle, "--json"]);
+    if (shown.error || shown.status !== 0) return null;
+    const envelope = parseEnvelope(shown.stdout);
+    if (envelope?.ok !== true) return null;
+    const result = envelope.result;
+    if (result === null || typeof result !== "object") return null;
+    const direct = result.terminal?.worktreePath;
+    if (typeof direct === "string" && direct !== "") return { path: direct };
+    const id = result.worker?.worktreeId ?? result.terminal?.worktreeId;
+    if (typeof id === "string") {
+      const sep = id.indexOf("::");
+      const path = sep === -1 ? "" : id.slice(sep + 2);
+      if (path !== "") return { path };
+    }
+    return null;
+  }
+
+  return { start, status, result, stop, workspace };
 }

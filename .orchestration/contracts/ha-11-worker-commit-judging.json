@@ -1,0 +1,19 @@
+{
+  "task_id": "ha-11-worker-commit-judging",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/ha-11-worker-commit-judging.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "scripts/adapters/orca.js",
+    "scripts/commands/run.js",
+    "scripts/lifecycle/runtime.js",
+    "tests/adapter-orca.test.js",
+    "tests/command-run.test.js",
+    "tests/engine-orca.test.js"
+  ]
+}
