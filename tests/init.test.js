@@ -352,7 +352,7 @@ test("renderCiWorkflow pins yukl to a commit and carries the bootstrap guard", (
   });
   assert.match(
     workflow,
-    /npm exec --yes --package="github:threelittlerunes\/yukl-os#abc123def456" -- yukl verify --base "origin\/\$\{\{ github\.base_ref \}\}"/,
+    /npm exec --yes --package="https:\/\/codeload\.github\.com\/threelittlerunes\/yukl-os\/tar\.gz\/abc123def456" -- yukl verify --base "origin\/\$\{\{ github\.base_ref \}\}"/,
   );
   assert.match(
     workflow,
@@ -367,6 +367,23 @@ test("renderCiWorkflow pins yukl to a commit and carries the bootstrap guard", (
   const doc = yaml.load(workflow);
   assert.equal(doc.jobs["verify-contract"].steps.length, 4);
   assert.equal(doc.jobs["verify-contract"]["runs-on"], "ubuntu-latest");
+});
+
+test("renderCiWorkflow refuses a github: package spec for the pinned yukl", () => {
+  const workflow = renderCiWorkflow({
+    baseRef: "main",
+    yuklPin: "abc123def456",
+    commands: { ...NO_CMDS, build: "npm run build" },
+  });
+  assert.doesNotMatch(
+    workflow,
+    /--package="github:/,
+    "the pinned yukl must be fetched by tarball URL, not a github: package spec",
+  );
+  assert.match(
+    workflow,
+    /--package="https:\/\/codeload\.github\.com\/threelittlerunes\/yukl-os\/tar\.gz\/abc123def456"/,
+  );
 });
 
 test("renderCiWorkflow sets up Python and runs python checks only when detected", () => {
@@ -494,7 +511,7 @@ test("renderCiWorkflow fails closed when the pinned yukl produces no check lines
   assert.match(step.run, /set \+e/);
   assert.match(
     step.run,
-    /yukl_output=\$\(npm exec --yes --package="github:threelittlerunes\/yukl-os#deadbeef"/,
+    /yukl_output=\$\(npm exec --yes --package="https:\/\/codeload\.github\.com\/threelittlerunes\/yukl-os\/tar\.gz\/deadbeef"/,
   );
   assert.match(step.run, /yukl_status=\$\?/);
   assert.match(step.run, /grep -q -E '\^\(PASS\|FAIL\) '/);
@@ -641,7 +658,10 @@ test("init a node-only repo: detected commands, null for the rest, checkout-sha 
     assert.match(workflow, /npm run build/);
     assert.ok(!workflow.includes("setup-python"));
     const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
-    assert.ok(workflow.includes(`yukl-os#${head.stdout.trim()}`), "CI pins the checkout SHA");
+    assert.ok(
+      workflow.includes(`yukl-os/tar.gz/${head.stdout.trim()}`),
+      "CI pins the checkout SHA",
+    );
 
     assert.equal(existsSync(join(dir, ".orchestration/contracts/.gitkeep")), true);
     assert.equal(existsSync(join(dir, ".orchestration/intents/.gitkeep")), true);
@@ -941,7 +961,7 @@ test("init works in a git worktree (.git is a file) on a named branch", async ()
     assert.equal(result.status, 0, `worktree init failed:\n${result.stderr}`);
     assert.equal(existsSync(join(wt, "yukl.config.json")), true);
     const workflow = readFileSync(join(wt, ".github/workflows/yukl.yml"), "utf8");
-    assert.match(workflow, /yukl-os#deadbeef/);
+    assert.match(workflow, /yukl-os\/tar\.gz\/deadbeef/);
   });
 });
 
@@ -1135,7 +1155,7 @@ test("init succeeds when the injected check confirms the pin is pushed (F4)", as
     const result = runInit({ cwd: dir, yuklPin: "deadbeef", checkPinReachable: () => true });
     assert.equal(result.ok, true, result.error);
     const workflow = readFileSync(join(dir, ".github/workflows/yukl.yml"), "utf8");
-    assert.match(workflow, /yukl-os#deadbeef/);
+    assert.match(workflow, /yukl-os\/tar\.gz\/deadbeef/);
   });
 });
 
@@ -1190,7 +1210,7 @@ test("F4 real checker, hermetic: a local bare remote with a pushed and an unpush
       const allowed = runInit({ cwd: fixture, yuklPin: pushedSha, checkPinReachable: checker });
       assert.equal(allowed.ok, true, allowed.error);
       const workflow = readFileSync(join(fixture, ".github/workflows/yukl.yml"), "utf8");
-      assert.ok(workflow.includes(`yukl-os#${pushedSha}`), "CI must pin the pushed SHA");
+      assert.ok(workflow.includes(`yukl-os/tar.gz/${pushedSha}`), "CI must pin the pushed SHA");
     });
   });
 });

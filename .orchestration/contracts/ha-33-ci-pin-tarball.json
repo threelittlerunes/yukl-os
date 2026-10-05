@@ -1,0 +1,15 @@
+{
+  "task_id": "ha-33-ci-pin-tarball",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/ha-33-ci-pin-tarball.json",
+    "CHANGELOG.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "scripts/yukl.js",
+    "templates/yukl-ci.yml",
+    "tests/init.test.js"
+  ]
+}
