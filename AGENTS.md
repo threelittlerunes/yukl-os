@@ -33,3 +33,7 @@ Provide:
 - Format: `npx @biomejs/biome format --write .`
 
 Failure to adhere would trigger process termination and `git worktree remove`; this enforcement loop is planned, not yet implemented.
+
+## 5. Architecture
+<!-- status: background -->
+The architecture is described in `docs/YUKL_ARCHITECTURE.md` and decision records are indexed in `docs/adr/README.md`.

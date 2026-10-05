@@ -1,0 +1,15 @@
+{
+  "task_id": "ha-32-records-adoption",
+  "empirical_proof": [
+    { "command": "npm run build", "expected_exit_code": 0 },
+    { "command": "npm run test", "expected_exit_code": 0 }
+  ],
+  "files_touched": [
+    ".orchestration/contracts/ha-32-records-adoption.json",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "docs/adr/README.md"
+  ]
+}

@@ -43,6 +43,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remote-tracking bookmark, a custom bookmark that does not already point at
   `@`, or a Git ref that does not resolve to the exported commit; a plain Git
   repository exits 0 and publishes nothing (v3-w2-vcs-sync).
+- Records standard adopted: `docs/adr/README.md` indexes decision records and the architecture document links to it (ha-32-records-adoption).
 
 ### Changed
 - The engine records every start before it makes it, and never repeats a start
