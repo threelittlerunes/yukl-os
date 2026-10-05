@@ -1,0 +1,47 @@
+# Written 2026-10-05 by the orca-setup coordinator. ADR 002 rollout task 5 for yukl-os (orca-setup docs/adr/002-development-records-standard.md); Kris approved the minimal scope 2026-10-05.
+# No .orchestration/gate.ps1 here: ADR 001 section 11 applied by hand. Documentation only, no hook, code or global configuration: T2, no design review.
+# Drafter DeepSeek V4.1 Flash; QA OMP pinned to Gemini 3.8 Flash high (Kris's rule until about 2026-10-29; yukl.config.json still names antigravity and is not changed here).
+
+intent:
+  goal: "yukl-os adopts the ADR 002 records standard without changing code or what yukl init ships: a new docs/adr/README.md indexes decision records (none yet) and links to where earlier decisions already live; docs/YUKL_ARCHITECTURE.md (name kept, scripts/repo-checks.js scans it) gains a Decisions section that links docs/adr/README.md; CLAUDE.md and AGENTS.md gain the same short Architecture pointer section; CHANGELOG.md gets one Unreleased line for this task."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "docs/adr/README.md"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-32-records-adoption.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - "CONTRIBUTING.md"
+      - "README.md"
+      - "scripts/**"
+      - "tests/**"
+      - "package.json"
+      - "docs/SDLC_PLAN.md"
+      - "docs/intents/**"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+  design_constraints:
+    - "Read C:/Users/kjeld/.claude/skills/dev-records/SKILL.md and its templates/adr-readme.md first; docs/adr/README.md follows that template with an empty index and a short 'Earlier decisions' list that links, without copying or rewording, to docs/intents/README.md (Decisions locked in the interview), docs/SDLC_PLAN.md, docs/AUDIT_REPORT.md, docs/REAUDIT_VERDICT.md and docs/PUBLICATION_AUDIT.md."
+    - "docs/YUKL_ARCHITECTURE.md keeps its name and every existing byte; only a new section is appended, carrying <!-- status: background --> under its heading, so scripts/validators/doc-status.js still passes."
+    - "CLAUDE.md and AGENTS.md get the identical new section (status marker included) so the parity check in scripts/repo-checks.js holds; CLAUDE.md stays under its 60-line and 40-instruction budget."
+    - "CHANGELOG.md: one line under ## [Unreleased], ending with (ha-32-records-adoption); no existing entry is changed, no release heading is added."
+    - "No git tag; the coordinator hands Kris the tag commands after merge."
+    - "en-GB, hyphens only, no em or en dashes in added text."
+  acceptance:
+    - "npm run build, npm run test and npm run format:check exit 0 before and after."
+    - "node scripts/yukl.js verify .orchestration/contracts/ha-32-records-adoption.json --base origin/main exits 0 with every check PASS."
+    - "git diff of docs/YUKL_ARCHITECTURE.md and CHANGELOG.md against the base shows additions only."
+    - "No em or en dashes in added lines; noreply author; git diff --stat only inside allowed_paths."
+  open_points_for_planning:
+    - "Not built on purpose: renaming docs/YUKL_ARCHITECTURE.md, editing CONTRIBUTING.md (shipped by yukl init), a 2.2.0 release of the Unreleased block, release tags (coordinator step after merge, pushed by Kris), changing yukl.config.json runtimes."
+
+consultation:
+  requires_human_approval: false
+  tier: T2
+  reason: "Documentation adoption decided in orca-setup ADR 002; no code, hook or policy change."
+  approvals:
+    - {who: Kris, when: "2026-10-05", what: "Minimal yukl-os adoption scope; QA on OMP Gemini 3.8 Flash high."}
