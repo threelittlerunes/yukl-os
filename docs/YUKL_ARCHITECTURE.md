@@ -903,3 +903,8 @@ stating plainly.
    same-owner re-check each performs narrows the window to the interval between
    its re-read of the lock and its removal; it does not close it. The module
    header of `scripts/lifecycle/locks.js` states the same residual limitation.
+
+## 5. Decisions
+
+<!-- status: background -->
+Decision records live in [docs/adr/README.md](adr/README.md), one file per decision, numbered from 001. A decision that changes this document names the section it changes, and the same change updates that section with a link back to the record.
