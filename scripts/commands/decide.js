@@ -101,7 +101,12 @@ function buildEvent(parsed, appliedAtSeq, currentStage) {
     data.action = parsed.decision;
   } else {
     // approve: a human re-affirms the current stage, so it does not move.
+    // The stage also lands in `data.stage`, the field that survives
+    // `appendEvent` and that the engine reads to clear an unknown start for
+    // the stage; `event.stage` is what `transition` reads, so approve still
+    // moves nothing.
     event.stage = currentStage;
+    data.stage = currentStage;
   }
   return event;
 }

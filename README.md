@@ -119,8 +119,9 @@ in a hash-chained log:
   `enforcement` event and stops the run - so `--unattended` changes only how the
   loop behaves between steps. Every start is recorded before it is made: a
   stage whose previous `stage_starting` has no recorded outcome blocks with
-  `R-NEEDS-HUMAN` instead of starting a second worker (a `yukl decide override
-  --to <stage>` clears it), and a runtime whose `start` throws is recorded as a
+  `R-NEEDS-HUMAN` instead of starting a second worker (a `yukl decide approve`
+  or a `yukl decide override --to <stage>` clears it), and a runtime whose
+  `start` throws is recorded as a
   `stage_failed`, diagnosed like any other failure, and then surfaced as the
   run's error so the command still exits 1 with the message. The one exception
   is a start whose residual worker could not be proven stopped: it is recorded

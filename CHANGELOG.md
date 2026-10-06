@@ -346,6 +346,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fails `npm exec` on a `github:` spec with "GitFetcher requires an Arborist
   constructor to pack a tarball", so the gate never ran; the pin, the bootstrap
   rule and the no-output guard are unchanged (ha-33-ci-pin-tarball).
+- `yukl decide approve` now persists the stage it re-affirms as `data.stage` on
+  its `human_decision`, so an approval clears an unknown start (a
+  `stage_starting` with no recorded outcome) for that stage exactly as
+  `yukl decide override --to <stage>` does, while still moving no stage; the
+  architecture document's start-safety section and the README now state that
+  approve and override both clear it. `docs/SDLC_PLAN.md` cites the scheduler as
+  architecture section 4.14, not 4.13. Guarded by `approve persists the stage it
+  re-affirms` (decide) and `an approval naming the stage clears the unknown
+  start` (engine) (ha-30-close-issues-009-010).
 
 ### Planned
 - Scheduled artifact purge implementing the retention policy in

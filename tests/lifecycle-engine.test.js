@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createFakeRuntime } from "../scripts/adapters/fake.js";
 import { appendEvent, headHash, readEvents, verifyChain } from "../scripts/lifecycle/events.js";
 import * as stages from "../scripts/lifecycle/stages.js";
@@ -11,6 +13,20 @@ import { RUN_LIMITS, RUN_LIMIT_RULE, runUntilBlocked, step } from "../scripts/li
 const ANCHOR_COMMIT = "a".repeat(40);
 const MERGE_SHA = "b".repeat(40);
 const GATE_COMMIT = "c".repeat(40);
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const YUKL = join(ROOT, "scripts", "yukl.js");
+
+/** Run `yukl decide` with YUKL_DISPATCH_ID cleared, so the CLI sees a human. */
+function runDecide(args) {
+  const env = { ...process.env };
+  delete env.YUKL_DISPATCH_ID;
+  return spawnSync(process.execPath, [YUKL, "decide", ...args], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env,
+  });
+}
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "yukl-engine-"));
@@ -860,6 +876,45 @@ test("a human_decision whose data.stage names the stage clears the unknown start
         "stage_started",
       ],
       "the decision closes the unknown start and the new start is recorded",
+    );
+  });
+});
+
+test("an approval naming the stage clears the unknown start", async () => {
+  await withTempDir(async (dir) => {
+    const taskId = "task-start-approve";
+    appendEvent(dir, taskId, {
+      type: "stage_starting",
+      actor: "engine",
+      data: { stage: "intent", runtime: "orca" },
+    });
+    // The decision is written by the real `yukl decide approve`: it re-affirms
+    // the stage it does not move but persists it in `data.stage`, so the
+    // approval closes the unknown start exactly as an override does. A reverted
+    // approve branch that persists no stage leaves the start unknown here.
+    const decided = runDecide([
+      "approve",
+      "--task",
+      taskId,
+      "--by",
+      "alice",
+      "--reason",
+      "the unknown start is resolved",
+      "--state-dir",
+      dir,
+    ]);
+    assert.equal(decided.status, 0, decided.stderr);
+
+    const runtime = countingRuntime();
+    const outcome = await step({ taskId, deps: makeDeps(dir, { runtime: () => runtime }) });
+    assert.equal(outcome.status, "started");
+    assert.equal(outcome.stage, "intent");
+    assert.equal(outcome.handle, "handle-intent");
+    assert.equal(runtime.startCount, 1, "the stage is started exactly once after the approval");
+    assert.deepEqual(
+      readEvents(dir, taskId).events.map((e) => e.type),
+      ["stage_starting", "human_decision", "stage_starting", "stage_started"],
+      "the approval closes the unknown start and the new start is recorded",
     );
   });
 });

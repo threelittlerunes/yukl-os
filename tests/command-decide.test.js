@@ -195,6 +195,37 @@ test("approve is recorded on a live task and leaves the stage unchanged", async 
   });
 });
 
+test("approve persists the stage it re-affirms", async () => {
+  await withTempDir(async (dir) => {
+    appendEvent(dir, TASK, { type: "stage_done", actor: "drafter", data: { to: "review" } });
+    const currentStage = foldState(readEvents(dir, TASK)).stage;
+    assert.equal(currentStage, "review");
+
+    const result = runCli([
+      "approve",
+      "--task",
+      TASK,
+      "--by",
+      "root",
+      "--reason",
+      "looks good",
+      "--state-dir",
+      dir,
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+
+    const log = readEvents(dir, TASK);
+    const decision = log.events[1];
+    assert.equal(decision.data.decision, "approve");
+    assert.equal(
+      decision.data.stage,
+      currentStage,
+      "the approval persists the stage it re-affirms",
+    );
+    assert.equal(foldState(log).stage, currentStage, "the approval moves no stage");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // must-reject cases (each proves nothing was appended)
 // ---------------------------------------------------------------------------

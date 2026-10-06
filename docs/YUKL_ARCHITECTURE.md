@@ -538,10 +538,12 @@ composition root, `a failed worker-stop over the real adapter blocks the next
 run instead of starting a second worker`.
 
 A human decision that names the stage clears the unknown start - the `data.to`
-that `yukl decide override --to <stage>` persists, or a `data.stage` - and the
-next step then starts the stage once. The other decisions cannot clear it:
-`approve`, `pause` and `resume` persist no stage, and `stop` names the terminal
-`stopped`, so an operator who resolves an unknown start uses
+that `yukl decide override --to <stage>` persists, or the `data.stage` that
+`yukl decide approve` persists for the stage it re-affirms - and the next step
+then starts the stage once. `approve` and `override --to <stage>` are the two
+decisions that clear it. The other decisions cannot: `pause` and `resume`
+persist no stage, and `stop` names the terminal `stopped`, so an operator who
+resolves an unknown start uses `yukl decide approve`,
 `yukl decide override --to <stage>` or stops the task. Nothing else is cleared:
 an open handle stays polled, so a decision naming a stage never makes the engine
 start a second worker beside a live one.
