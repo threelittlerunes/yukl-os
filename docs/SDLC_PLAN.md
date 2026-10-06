@@ -25,7 +25,7 @@ Configure a minimal, strict root `CLAUDE.md`. The orchestrator uses this file to
 <!-- status: planned -->
 **"Loops Do The Work":** Implement continuous scheduling mechanics (like a `/loop` command). Instead of manually triggering agents, configure them to run via cron jobs overnight to autonomously babysit PRs, auto-rebase branches, or repeatedly attempt to fix flaky CI tests. Built: the loop mechanism itself - `yukl run --unattended` and the scheduler described below. Still not built: the trigger layer and the PR-babysitting loops.
 
-**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool. Built: `yukl run --unattended` keeps driving a task until it is terminal, needs a human, escalates or breaches a run limit, and `yukl schedule` runs tasks whose scopes cannot overlap in parallel worktrees while serialising the rest. Still not built: cron or overnight triggering and the PR-babysitting loops. Sections 4.7 and 4.13 of `docs/YUKL_ARCHITECTURE.md` document both commands.
+**Parallel Execution:** Run these loops across 5 to 10 parallel local sessions, allowing the agentic harness to act as a persistent operating layer rather than just a chat tool. Built: `yukl run --unattended` keeps driving a task until it is terminal, needs a human, escalates or breaches a run limit, and `yukl schedule` runs tasks whose scopes cannot overlap in parallel worktrees while serialising the rest. Still not built: cron or overnight triggering and the PR-babysitting loops. Sections 4.7 and 4.14 of `docs/YUKL_ARCHITECTURE.md` document both commands.
 
 ## Phase 4: Coercive Guardrails & Rational Persuasion
 <!-- status: background -->
