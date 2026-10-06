@@ -286,9 +286,12 @@ Init writes four kinds of files:
   the detected checks - each line in its own subshell, so a `cd <dir> && `
   prefix cannot leak into the next line - and gates the PR on
   `yukl verify --base origin/<base_ref>`. The yukl it runs is
-  **commit-pinned**: `npm exec --package=github:threelittlerunes/yukl-os#<sha>`
+  **commit-pinned**: `npm exec --package=https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/<sha>`
   with the SHA taken from `--yukl-pin` or detected from the harness checkout -
-  never a floating ref. **The pin must be at or after the task h merge**: the
+  never a floating ref. The tarball URL is used because npm 10.9.9 on the Node
+  22 runner fails `npm exec` on a `github:` spec with "GitFetcher requires an
+  Arborist constructor to pack a tarball", so the gate would never run.
+  **The pin must be at or after the task h merge**: the
   verify step captures yukl's output and exit status and, when the output
   contains no check line (no line starting with `PASS` or `FAIL`), prints
   "yukl produced no output; the pinned version `<sha>` cannot run via the npm

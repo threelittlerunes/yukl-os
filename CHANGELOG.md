@@ -340,6 +340,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `yukl run --base` reads its config and policy, so a task branch can no longer
   widen the `allowed_paths` its own scheduling is planned from; without `--base`
   the working tree stays a documented local preview (v3-unattended).
+- The generated CI fetches the pinned yukl by GitHub tarball URL
+  (`npm exec --package=https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/<sha>`)
+  instead of a `github:` package spec, because npm 10.9.9 on the Node 22 runner
+  fails `npm exec` on a `github:` spec with "GitFetcher requires an Arborist
+  constructor to pack a tarball", so the gate never ran; the pin, the bootstrap
+  rule and the no-output guard are unchanged (ha-33-ci-pin-tarball).
 
 ### Planned
 - Scheduled artifact purge implementing the retention policy in

@@ -1584,8 +1584,11 @@ export function resolveYuklPin({ cwd, yuklPin = null } = {}) {
 
 /**
  * True when the pinned yukl commit is reachable on the yukl-os remote, so
- * `npm exec --package=github:threelittlerunes/yukl-os#<sha>` in the
- * generated CI can fetch it. Checks local remote-tracking branches first
+ * `npm exec --package=https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/<sha>`
+ * in the generated CI can fetch it. npm 10 on Node 22 fails `npm exec` on a
+ * `github:` spec with "GitFetcher requires an Arborist constructor to pack a
+ * tarball", so the CI fetches the same commit by tarball URL instead.
+ * Checks local remote-tracking branches first
  * (offline, authoritative for anything already fetched), then falls back to
  * scanning `git ls-remote` against the harness origin (the yukl-os repo,
  * with the well-known URL when no origin is configured, e.g. an npm
@@ -1624,7 +1627,10 @@ export function pinReachableOnOrigin(pin, root = PACKAGE_ROOT) {
  * detected, runs exactly the detected checks - each in its own subshell so
  * a subdirectory `cd` cannot leak into the next line - and gates the PR on
  * `yukl verify --base origin/<base_ref>` running a PINNED yukl commit via
- * `npm exec --package=github:threelittlerunes/yukl-os#<sha>`. The verify
+ * `npm exec --package=https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/<sha>`.
+ * npm 10 on Node 22 fails `npm exec` on a `github:` spec with "GitFetcher
+ * requires an Arborist constructor to pack a tarball", so the CI fetches the
+ * same commit by tarball URL instead. The verify
  * step fails closed when the pinned yukl produces no check lines: a yukl-os
  * commit from before the task h bin-shim fix exits 0 silently through the
  * npm shim, and the guard turns that into a hard failure naming the pin. On

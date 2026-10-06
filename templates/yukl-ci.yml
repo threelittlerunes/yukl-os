@@ -29,7 +29,7 @@ jobs:
             exit 0
           fi
           set +e
-          yukl_output=$(npm exec --yes --package="github:threelittlerunes/yukl-os#{YUKL_PIN}" -- yukl verify --base "origin/${{ github.base_ref }}" 2>&1)
+          yukl_output=$(npm exec --yes --package="https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/{YUKL_PIN}" -- yukl verify --base "origin/${{ github.base_ref }}" 2>&1)
           yukl_status=$?
           echo "$yukl_output"
           if ! printf '%s' "$yukl_output" | grep -q -E '^(PASS|FAIL) '; then
