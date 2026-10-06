@@ -1,0 +1,47 @@
+# Written 2026-10-05 by the orca-setup coordinator after the Pathfinder CI gate failed (Pathfinder PR #4, run 37361221166).
+# No .orchestration/gate.ps1 here: ADR 001 section 11 applied by hand. Changes the generated CI template and its tests; no hook, no global configuration, no policy: T2, no design review.
+# Drafter DeepSeek V4.1 Flash; QA OMP pinned to Gemini 3.8 Flash high.
+
+intent:
+  goal: "The CI workflow that yukl init generates fetches the pinned yukl by a GitHub tarball URL (https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/<sha>) instead of a github: package spec, because npm 10.9.9 (Node 22, the runner default) fails npm exec on a github: spec with 'GitFetcher requires an Arborist constructor to pack a tarball', so the gate never runs. The same commit as a tarball URL runs under npm 10.9.9 (reproduced and verified 2026-10-05). The pin, the bootstrap rule and the no-output guard are unchanged."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "templates/yukl-ci.yml"
+      - "scripts/yukl.js"
+      - "tests/init.test.js"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-33-ci-pin-tarball.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - ".github/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "CONTRIBUTING.md"
+      - "scripts/lifecycle/**"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+  design_constraints:
+    - "templates/yukl-ci.yml: only the --package value changes, to https://codeload.github.com/threelittlerunes/yukl-os/tar.gz/{YUKL_PIN}; every other byte of the template stays."
+    - "scripts/yukl.js: only the two doc comments that name the github: form change to the tarball form, with one sentence on why (npm 10 cannot npm exec a github: spec). No code change; pinReachableOnOrigin stays as it is."
+    - "tests/init.test.js: Legacy Test Migration approved by Kris 2026-10-05 for exactly two assertions (the regexes at about lines 355 and 497) that expect the github: form; only the expected package text changes to the tarball URL, the pin value and the rest of each assertion stay. No other existing assertion changes."
+    - "A new test, named as a behaviour sentence, refuses a generated workflow that contains a github: package spec, so the old form cannot return."
+    - "docs/YUKL_ARCHITECTURE.md (the commit-pinned paragraph in section 3.6) and README.md if it names the form: describe the tarball form and why; CHANGELOG.md: one Fixed line under Unreleased ending (ha-33-ci-pin-tarball)."
+    - "en-GB, hyphens only, no em or en dashes in added text."
+  acceptance:
+    - "npm run build, npm run test and npm run format:check exit 0."
+    - "node scripts/yukl.js verify .orchestration/contracts/ha-33-ci-pin-tarball.json --base <intent commit> exits 0 with every check PASS."
+    - "Deliberate fault: putting the github: form back into templates/yukl-ci.yml makes the new test and both migrated assertions fail."
+    - "git diff --stat only inside allowed_paths; noreply author; no em or en dashes in added lines."
+  open_points_for_planning:
+    - "Not built on purpose: rewording the no-output guard message (it blamed the bin shim for a fetch failure on Pathfinder; adjacent, propose separately), regenerating workflows in repos already set up (Pathfinder patched by hand as ors-34)."
+
+consultation:
+  requires_human_approval: false
+  tier: T2
+  reason: "Fixes the generated CI gate's fetch form; no hook, policy or global configuration change."
+  approvals:
+    - {who: Kris, when: "2026-10-05", what: "Fix yukl init's pin form after the Pathfinder gate failure; Legacy Test Migration of the two github: assertions in tests/init.test.js."}
