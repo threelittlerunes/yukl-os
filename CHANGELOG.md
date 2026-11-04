@@ -46,6 +46,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Records standard adopted: `docs/adr/README.md` indexes decision records and the architecture document links to it (ha-32-records-adoption).
 
 ### Changed
+- `.gitignore` ignores `.internal/`, so local notes are never committed
+  (cloud-yukl-verify-and-safe-fixes).
 - The engine records every start before it makes it, and never repeats a start
   whose outcome is unknown: a `stage_starting` event is appended before
   `runtime.start`, and a later step that finds it unclosed - no `stage_started`,

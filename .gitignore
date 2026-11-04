@@ -19,3 +19,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Local notes (never committed)
+.internal/
