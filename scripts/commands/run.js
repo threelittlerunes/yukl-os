@@ -57,6 +57,7 @@ import {
 import { loadAdapter } from "../lifecycle/runtime.js";
 import * as stages from "../lifecycle/stages.js";
 import { autonomyLevel, trackRecord } from "../lifecycle/track.js";
+import { readVerdictAt, verdictPath } from "../lifecycle/verdict.js";
 import {
   CONTRACTS_DIR,
   JJ_WC_BOOKMARK,
@@ -67,6 +68,8 @@ import {
 import { lifecycleViolations } from "../validators/lifecycle.js";
 
 const CONFIG_FILE = "yukl.config.json";
+// The stage judged by its committed verdict (scripts/lifecycle/verdict.js).
+const AUDIT_STAGE = "audit";
 const DEFAULT_BASE = "main";
 const DEFAULT_WORKTREE_REF = "HEAD";
 const FALLBACK_RUNTIME_ID = "runtime";
@@ -266,11 +269,18 @@ function resolveStageWorkspace({ runtimes, stateDir }, stage, taskId) {
  * own worktree, so only the worker's HEAD names the work being judged. A
  * workspace that cannot be resolved refuses the anchor outright (the engine
  * then blocks with `R-NO-ANCHOR`) rather than anchoring the wrong commit.
+ *
+ * The `audit` stage anchors at its verdict, `.orchestration/verdicts/<task_id>.json`,
+ * instead of the contract: the auditor commits the verdict after the contract
+ * exists, so only the last commit that touched the verdict holds it. A verdict
+ * that is not committed falls back to the tip like a contract does, and the
+ * engine then finds no verdict there and blocks with `R-NO-VERDICT`.
  */
 function makeAnchors({ cwd, ref, runtimes, stateDir }) {
   return {
     anchorStage: async (stage, taskId) => {
-      const relPath = `${CONTRACTS_DIR}/${taskId}.json`;
+      const contractPath = `${CONTRACTS_DIR}/${taskId}.json`;
+      const relPath = stage === AUDIT_STAGE ? (verdictPath(taskId) ?? contractPath) : contractPath;
       const worker = resolveStageWorkspace({ runtimes, stateDir }, stage, taskId);
       if (worker.implements) {
         if (!worker.ok) return { ok: false };
@@ -287,6 +297,23 @@ function makeAnchors({ cwd, ref, runtimes, stateDir }) {
       const commit = headCommit(cwd, ref);
       if (commit === null) return { ok: false };
       return { ok: true, anchor: { path: relPath, commit } };
+    },
+  };
+}
+
+/**
+ * Read the audit verdict at the audit stage's anchor commit. For a stage whose
+ * runtime reports the worker's workspace, git runs in that checkout, where the
+ * auditor made the commit; otherwise in the orchestrator checkout. The verdict
+ * is always read from the commit, never from the working tree.
+ */
+function makeVerdicts({ cwd, runtimes, stateDir }) {
+  return {
+    read: async ({ stage, taskId, anchor }) => {
+      const worker = resolveStageWorkspace({ runtimes, stateDir }, stage, taskId);
+      if (worker.implements && !worker.ok) return { ok: false, error: worker.error };
+      const dir = worker.implements ? worker.path : cwd;
+      return readVerdictAt({ cwd: dir, taskId, commit: anchor?.commit });
     },
   };
 }
@@ -441,6 +468,8 @@ function describeOutcome(outcome) {
   if (outcome.stage) parts.push(`at ${outcome.stage}`);
   if (outcome.from && outcome.to) parts.push(`${outcome.from} -> ${outcome.to}`);
   if (outcome.rule) parts.push(`(${outcome.rule})`);
+  const detail = outcome.detail ?? outcome.outcome?.detail;
+  if (typeof detail === "string" && detail !== "") parts.push(`- ${detail}`);
   const limit = outcome.limit;
   if (limit && typeof limit === "object") {
     parts.push(`(${limit.name} ${limit.observed} >= ${limit.max})`);
@@ -562,6 +591,7 @@ export async function run(argv = [], overrides = {}) {
       stages,
       anchors:
         overrides.anchors ?? makeAnchors({ cwd, ref: DEFAULT_WORKTREE_REF, runtimes, stateDir }),
+      verdicts: overrides.verdicts ?? makeVerdicts({ cwd, runtimes, stateDir }),
       requiresHuman: makeRequiresHuman({ policy, stateDir, taskId, lifecycle }),
       runtime: (stage) => runtimes.get(stage) ?? null,
       runtimeId: (stage) => lifecycle.runtimes?.[stage]?.adapter ?? FALLBACK_RUNTIME_ID,

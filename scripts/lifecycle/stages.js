@@ -30,6 +30,9 @@ export const R_TERMINAL = "R-TERMINAL";
 export const R_NEEDS_HUMAN = "R-NEEDS-HUMAN";
 export const R_HUMAN_OVERRIDE = "R-HUMAN-OVERRIDE";
 export const R_ILLEGAL_EDGE = "R-ILLEGAL-EDGE";
+// The audit stage has no readable, well-formed, unconsumed verdict at its
+// anchor (scripts/lifecycle/verdict.js); the stage blocks and never passes.
+export const R_NO_VERDICT = "R-NO-VERDICT";
 
 export const RULES = Object.freeze({
   ADVANCE_ANCHORED: R_ADVANCE_ANCHORED,
@@ -39,6 +42,7 @@ export const RULES = Object.freeze({
   NEEDS_HUMAN: R_NEEDS_HUMAN,
   HUMAN_OVERRIDE: R_HUMAN_OVERRIDE,
   ILLEGAL_EDGE: R_ILLEGAL_EDGE,
+  NO_VERDICT: R_NO_VERDICT,
 });
 
 // done and stopped are closed to every event. escalated is closed to agent

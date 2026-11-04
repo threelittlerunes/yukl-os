@@ -457,7 +457,8 @@ runtime's clean audits, failed audits and enforcement stops; only
 event is never counted whatever actor wrote it. `autonomyLevel` raises the
 level to each reached threshold in `policy.trackRecord.levels` in ascending
 order, clamps it to `ceiling` and subtracts one for any enforcement stop. With
-the committed policy, five clean audits earn level 1.
+the committed policy, five clean audits earn level 1. The engine appends an
+`audit_verdict` for every audit verdict it reads (section 4.19).
 
 ### 4.7 Run limits and unattended runs
 <!-- status: implemented tests=tests/command-run.test.js#an unattended run stops on a breached agent-start limit and records it -->
@@ -912,6 +913,44 @@ stating plainly.
    same-owner re-check each performs narrows the window to the interval between
    its re-read of the lock and its removal; it does not close it. The module
    header of `scripts/lifecycle/locks.js` states the same residual limitation.
+
+### 4.19 The audit verdict
+<!-- status: implemented tests=tests/engine-audit-verdict.test.js#a fail verdict with exit code 0 does not advance audit and appends one audit_verdict fail -->
+
+The `audit` stage passes on the verdict its auditor committed, not on the
+auditor's exit code, so an auditor that writes a failing verdict and exits 0
+does not pass. When the audit runtime exits 0, the engine reads
+`.orchestration/verdicts/<task_id>.json` at the audit stage's resolved anchor
+through `git show <commit>:<path>`, never from the working tree. `yukl run`
+anchors the audit at the last commit that touched the verdict file instead of
+the contract, because the auditor commits its verdict after the contract
+exists, and reads it in the worker's checkout when the runtime reports one
+(section 4.11). The verdict is an object whose `verdict` is `pass` or `fail`
+(lower case) and whose `reasons` is an array of strings; any other shape is
+malformed (`scripts/lifecycle/verdict.js`).
+
+`pass` hands the move to the stage machine, so self-approval and the
+human-authority policy apply exactly as before. `fail` goes through the
+ordinary failure path with an observation carrying `proofFailed: true`, so
+diagnosis, the attempt limit and escalation are unchanged. A missing,
+unreadable or malformed verdict, a verdict commit an earlier attempt already
+judged all block with `R-NO-VERDICT` and append nothing, so an audit run by
+`yukl run` never passes without a fresh verdict. Each
+verdict that is read appends one `audit_verdict` event carrying `verdict`,
+`runtime`, `stage`, `commit` and `reasons`, which the track record counts
+(section 4.6); a step that resumes the same attempt reuses that event rather
+than recording the verdict twice. Enforcement still runs before the verdict is
+read, and a non-zero exit still fails the stage without reading one. Only
+`audit` reads a verdict; `review` and every other stage complete on the exit
+code. The engine takes the reader as an injected dependency: `yukl run` always
+injects it, and an environment built by hand without one keeps the exit-code
+rule.
+
+A task whose auditor commits a verdict meets two existing checks. Run-time path
+enforcement exempts only contract files, so the task's intent must list
+`.orchestration/verdicts/<task_id>.json` in `allowed_paths`; and `yukl verify`
+treats the verdict like any other changed file, so the task's contract must
+list it in `files_touched`.
 
 ## 5. Decisions
 

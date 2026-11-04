@@ -273,6 +273,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change becomes HEAD (task E).
 
 ### Fixed
+- The `audit` stage passes on its committed verdict, not on the auditor's exit
+  code (finding Y2). The engine reads `.orchestration/verdicts/<task_id>.json`
+  at the audit anchor's commit, which `yukl run` now resolves at the last commit
+  that touched the verdict: `pass` advances, `fail` fails the stage through the
+  existing failure path even when the auditor exited 0, and a missing, malformed
+  or already judged verdict blocks with the new rule `R-NO-VERDICT`. Each verdict
+  read appends one `audit_verdict` event, so the track record can count real
+  audits (cloud-y2-audit-verdict).
 - The engine asks the human-authority policy before an `integrate` merge: when
   the post-merge edge needs a human it blocks with `R-NEEDS-HUMAN` and never
   calls the VCS. Before, it merged first and only then refused the stage, so a
