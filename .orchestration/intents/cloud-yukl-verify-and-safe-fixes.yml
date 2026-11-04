@@ -1,0 +1,45 @@
+# Intent for cloud-yukl-verify-and-safe-fixes. Merged before the implementation
+# pull request, so `yukl verify --base` reads this scope from the base branch.
+
+intent:
+  goal: "Make main green again and close two merge-safety gaps. (1) CLAUDE.md is the single import line `@AGENTS.md`; the V-1 routing check, the AGENTS.md parity check, the consistency scan and the instruction budget read CLAUDE.md with its whole-line `@<path>` imports expanded, so `npm run build` and `npm run test` pass and the constitution the agent loads is budgeted again. (2) `yukl.policy.json` keeps `merge-implementation-pr` for a human and sets `limits.maxAttemptsPerStage` to 2. (3) The engine asks the human-authority policy before an `integrate` merge and blocks with R-NEEDS-HUMAN without calling the VCS, because it previously merged first and refused the stage afterwards. (4) `.gitignore` ignores `.internal/`."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - ".gitignore"
+      - "CHANGELOG.md"
+      - "yukl.policy.json"
+      - "scripts/lib/harness.js"
+      - "scripts/repo-checks.js"
+      - "scripts/lifecycle/engine.js"
+      - "tests/agents.test.js"
+      - "tests/rules.test.js"
+      - "tests/lifecycle-policy.test.js"
+      - "tests/command-run.test.js"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - "docs/SDLC_PLAN.md"
+      - ".orchestration/contracts/cloud-yukl-verify-and-safe-fixes.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - ".github/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "yukl.config.json"
+  design_constraints:
+    - "CLAUDE.md and AGENTS.md are not edited; the checks follow the import instead."
+    - "An import is expanded only for a whole line `@<path>` naming an existing repository-relative file; an absolute, `~` or `..` path, a missing file and an import cycle throw."
+    - "Existing test assertions are not weakened. Only the two assertions that pin the committed policy values change to the new values, and two command-run tests that use the committed policy as a fixture pin the values they exercise (attempt limit 3, automatic merge) instead of reading them."
+    - "The test names that doc-status markers cite stay unchanged."
+    - "yukl.config.json, including lifecycle.runtimes, is unchanged; no config file is deleted."
+    - "en-GB, hyphens only, no em or en dashes in added text."
+  acceptance:
+    - "npm run build, npm run test and npm run format:check exit 0."
+    - "node scripts/yukl.js verify --base origin/main exits 0 with every check PASS."
+    - "Deliberate fault: removing a rule route from AGENTS.md makes npm run build fail with V-1."
+    - "Deliberate fault: without the engine gate, the new command-run test sees `gh pr merge` called under the committed policy and fails."
+
+consultation:
+  requires_human_approval: true
+  tier: T2
+  reason: "Changes the committed autonomy policy and the engine's merge path; the repository owner approved the change in the session that produced it."
