@@ -1,0 +1,47 @@
+# Intent for cloud-y2-audit-verdict. Merged before the implementation
+# pull request, so `yukl verify --base` reads this scope from the base branch.
+
+intent:
+  goal: "Close finding Y2: an audit stage must pass on its recorded verdict, not on the auditor's exit code. Today `inspectRuntime` (scripts/lifecycle/engine.js) treats exit code 0 as success and `completeAgentStage` advances the audit stage after checking only enforcement and an anchor, so an auditor that writes FAIL and exits 0 counts as a pass. After this change the engine reads a verdict file at the audit stage's anchor commit: `pass` advances the stage, `fail` fails the stage through the existing failure path, and a missing or malformed verdict blocks the stage (fail closed). Each read verdict also appends an `audit_verdict` event, which `trackRecord` (scripts/lifecycle/track.js) already counts."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "CHANGELOG.md"
+      - "scripts/lifecycle/engine.js"
+      - "scripts/lifecycle/stages.js"
+      - "scripts/lifecycle/verdict.js"
+      - "scripts/commands/run.js"
+      - "tests/lifecycle-verdict.test.js"
+      - "tests/engine-audit-verdict.test.js"
+      - "docs/YUKL_ARCHITECTURE.md"
+      - ".orchestration/contracts/cloud-y2-audit-verdict.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - ".github/**"
+      - "package.json"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - "scripts/adapters/**"
+  design_constraints:
+    - "The verdict file is `.orchestration/verdicts/<task_id>.json`, read at the commit named by the audit stage's resolved anchor, never from the working tree. Shape: an object with `verdict` equal to `pass` or `fail` (lower case) and a `reasons` array of strings; any other shape is malformed."
+    - "Only the `audit` stage reads a verdict. The `review` stage and every other stage keep their current behaviour; extending the rule to `review` is a separate decision."
+    - "A missing, unreadable or malformed verdict blocks the stage with a rule named in scripts/lifecycle/stages.js (for example R-NO-VERDICT) and appends nothing that advances. It never passes."
+    - "A `fail` verdict goes through the existing failure path (`failStage`), so the attempt limit and escalation apply unchanged."
+    - "Every verdict read (pass or fail) appends one `audit_verdict` event with `data.verdict` and `data.runtime` in the shape `trackRecord` already reads. Malformed or missing verdicts append no `audit_verdict` event."
+    - "Self-approval (R-SELF-APPROVAL) and enforcement keep their current order and behaviour."
+    - "Existing test assertions are not weakened, skipped or removed. If an existing test or fixture needs a verdict file to keep passing, that is a test change: the session lists each one and inform the repository owner, naming those tests before editing them."
+    - "The adapters (scripts/adapters/**) and the dispatch contract are unchanged. If the auditor cannot commit a verdict file at the anchor without changing them, stop and report the options in the pull request instead of implementing."
+    - "en-GB, hyphens only, no em or en dashes in added text."
+  acceptance:
+    - "npm run build, npm run test and npm run format:check exit 0."
+    - "node scripts/yukl.js verify --base origin/main exits 0 with every check PASS."
+    - "New tests show: a `pass` verdict advances audit and appends one audit_verdict pass; a `fail` verdict with exit code 0 does not advance and appends one audit_verdict fail; a missing verdict and a malformed verdict each block with the named rule and append no audit_verdict."
+    - "Deliberate fault: with the verdict read removed from the engine, the `fail` verdict with exit code 0 test fails."
+    - "docs/YUKL_ARCHITECTURE.md describes the verdict rule with a doc-status marker citing one of the new tests."
+
+consultation:
+  requires_human_approval: false
+  tier: T2
+  reason: "Changes how the engine decides an audit outcome; the repository owner approved the change in the session that produced it."
