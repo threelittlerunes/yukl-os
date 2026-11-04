@@ -65,6 +65,6 @@ Implement lightweight middleware that monitors API budgets and token usage. If a
 3. **Signal definition:** Undecided which PR events count as a correction: review comments, commits that apply a suggested change, or reviews that request changes.
 4. **Digestion:** Summarising corrections requires an LLM call from GitHub Actions, which means an API secret, a cost budget, and a choice of model. All undecided.
 5. **Budget:** `CLAUDE.md` is capped at 60 lines and rule files carry instruction budgets (tests/rules.test.js). Automated proposals must pass `npm run test` or be rejected; they must never be truncated silently.
-6. **Scope:** Proposals must target `CLAUDE.md` and `AGENTS.md` together, because tests/agents.test.js requires the two files to remain identical.
+6. **Scope:** Proposals must target `AGENTS.md`: `CLAUDE.md` is the single import line `@AGENTS.md`, and tests/agents.test.js requires the expanded `CLAUDE.md` to stay identical to `AGENTS.md`.
 
 **Empirical acceptance criterion for starting Phase 5 planning:** `yukl verify` has passed on at least one merged PR in a repository using the harness.

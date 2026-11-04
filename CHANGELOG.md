@@ -46,6 +46,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Records standard adopted: `docs/adr/README.md` indexes decision records and the architecture document links to it (ha-32-records-adoption).
 
 ### Changed
+- `.gitignore` ignores `.internal/`, so local notes are never committed
+  (cloud-yukl-verify-and-safe-fixes).
+- `yukl.policy.json` keeps `merge-implementation-pr` for a human and allows
+  two attempts per stage (`limits.maxAttemptsPerStage: 2`)
+  (cloud-yukl-verify-and-safe-fixes).
 - The engine records every start before it makes it, and never repeats a start
   whose outcome is unknown: a `stage_starting` event is appended before
   `runtime.start`, and a later step that finds it unclosed - no `stage_started`,
@@ -268,6 +273,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change becomes HEAD (task E).
 
 ### Fixed
+- The engine asks the human-authority policy before an `integrate` merge: when
+  the post-merge edge needs a human it blocks with `R-NEEDS-HUMAN` and never
+  calls the VCS. Before, it merged first and only then refused the stage, so a
+  `"human"` merge policy still merged (cloud-yukl-verify-and-safe-fixes).
+- `npm run build` and `npm run test` pass again with `CLAUDE.md` as the single
+  import line `@AGENTS.md`: the V-1 routing check, the AGENTS.md parity check,
+  the consistency scan and the instruction budget read `CLAUDE.md` with its
+  `@<path>` imports expanded (`readImported` in `scripts/lib/harness.js`), so
+  the constitution the agent loads is budgeted again
+  (cloud-yukl-verify-and-safe-fixes).
 - Path enforcement and the stage anchor now follow the worker's commit. An
   Orca worker commits in its own Git worktree, but `yukl run` anchored a
   finished agent stage at the orchestrator checkout's `HEAD` and ran path

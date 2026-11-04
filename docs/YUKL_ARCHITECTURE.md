@@ -437,11 +437,15 @@ limits (section 4.7). `requiresHuman(policy, transitionId, level)` returns true
 for `"human"`, false for `"auto"`, and for `{ auto_at_level: n }` needs a human
 below level `n`. An unknown transition id, or a value that is neither form,
 fails closed and needs a human. The committed policy makes stage advances,
-within-limit retries, implementation merges, enforcement stops, autonomy
-decreases and reopens automatic, and keeps merging an intent or policy PR,
-raising a budget or ceiling, answering an escalation, bootstrapping init,
-abandoning a task and starting an unattended run human. `--base` reads the
-policy from that ref, so a pull request cannot widen its own autonomy.
+within-limit retries, enforcement stops, autonomy decreases and reopens
+automatic, and keeps merging an implementation, intent or policy PR, raising a
+budget or ceiling, answering an escalation, bootstrapping init, abandoning a
+task and starting an unattended run human; it allows two attempts per stage.
+The engine asks the policy about the post-merge edge before it calls the VCS:
+when that edge needs a human, `integrate` blocks with `R-NEEDS-HUMAN`, appends
+nothing and merges nothing, so the engine never merges a pull request the
+policy keeps for a human. `--base` reads the policy from that ref, so a pull
+request cannot widen its own autonomy.
 
 ### 4.6 Earned autonomy
 <!-- status: implemented tests=tests/lifecycle-track.test.js#autonomyLevel raises to each reached threshold and clamps to the ceiling -->

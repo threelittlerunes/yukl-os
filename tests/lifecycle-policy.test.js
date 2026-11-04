@@ -271,9 +271,9 @@ test("loadPolicy without base reads the working tree as a preview", () => {
   const { ok, policy, errors } = loadPolicy({ cwd: ROOT });
   assert.equal(ok, true, errors.join("; "));
   assert.equal(policy.ceiling, 1);
-  assert.equal(policy.limits.maxAttemptsPerStage, 3);
+  assert.equal(policy.limits.maxAttemptsPerStage, 2);
   assert.equal(policy.autonomy["merge-intent-pr"], "human");
-  assert.equal(policy.autonomy["merge-implementation-pr"], "auto");
+  assert.equal(policy.autonomy["merge-implementation-pr"], "human");
 });
 
 test("loadPolicy reports a missing policy without base", async () => {

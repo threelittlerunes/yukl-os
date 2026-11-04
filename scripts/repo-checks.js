@@ -3,7 +3,9 @@
 //
 // Everything in this module governs this repository only: community-health
 // files, the path-scoped rule routing (CLAUDE.md section 2, orca.yaml V-2),
-// the CLAUDE.md/AGENTS.md parity rule and the instruction budgets. None of it
+// the CLAUDE.md/AGENTS.md parity rule and the instruction budgets. Each check
+// reads CLAUDE.md with its `@<path>` imports expanded (readImported), so a
+// CLAUDE.md that is only `@AGENTS.md` is checked as AGENTS.md. None of it
 // ships as part of the installable core (scripts/yukl.js), which must run
 // inside any target repository. Only this repo's `npm run build` and
 // `npm run test` call this module.
@@ -11,6 +13,7 @@
 import {
   exists,
   listRuleFiles,
+  readImported,
   readText,
   readJson,
   readYaml,
@@ -125,7 +128,8 @@ export function measure() {
   let total = 0;
 
   for (const file of files) {
-    const text = readText(file);
+    // Budget the text the agent loads: CLAUDE.md's `@AGENTS.md` import expanded.
+    const text = readImported(file);
     const instructions = countInstructions(text);
     const lines = text.split(/\r?\n/).length;
     const budget = BUDGETS[file] ?? BUDGETS.__default__;
@@ -156,11 +160,14 @@ export function measure() {
 // CLAUDE.md / AGENTS.md parity
 // ---------------------------------------------------------------------------
 
-/** True when AGENTS.md is byte-identical to CLAUDE.md after the title line. */
+/**
+ * True when AGENTS.md is byte-identical to CLAUDE.md after the title line,
+ * with CLAUDE.md's `@<path>` imports expanded: a CLAUDE.md that is only
+ * `@AGENTS.md` is AGENTS.md itself, so it passes.
+ */
 export function agentsParity() {
-  const bodyWithoutTitle = (relPath) =>
-    readText(relPath).replace(/\r\n/g, "\n").split("\n").slice(1).join("\n");
-  return bodyWithoutTitle("AGENTS.md") === bodyWithoutTitle("CLAUDE.md");
+  const bodyWithoutTitle = (text) => text.replace(/\r\n/g, "\n").split("\n").slice(1).join("\n");
+  return bodyWithoutTitle(readText("AGENTS.md")) === bodyWithoutTitle(readImported("CLAUDE.md"));
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +192,7 @@ export function validateGithubStandards() {
 export function validateConsistency() {
   const errors = [];
   for (const file of SCAN_FILES) {
-    const text = readText(file);
+    const text = readImported(file);
 
     if (/\bCONTRACT\.json\b/.test(text)) {
       errors.push(`${file}: references CONTRACT.json; use ${CONTRACT_SCHEMA} (AF-7)`);
@@ -236,7 +243,7 @@ export function validateRules() {
     errors.push('.claude/rules/drafter-ui.md: frontmatter paths must include "src/ui/**" (IC-1)');
 
   const routed = new Set(
-    readText("CLAUDE.md").match(/\.claude\/rules\/[A-Za-z0-9._-]+\.md/g) ?? [],
+    readImported("CLAUDE.md").match(/\.claude\/rules\/[A-Za-z0-9._-]+\.md/g) ?? [],
   );
   for (const file of listRuleFiles()) {
     if (!routed.has(file))

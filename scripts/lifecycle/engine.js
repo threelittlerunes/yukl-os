@@ -37,6 +37,8 @@ const FALLBACK_PATH_SCOPE_RULE = "R-PATH-SCOPE";
 const FALLBACK_RUNTIME_ID = "runtime";
 const INTEGRATE_RUNTIME_ID = "vcs";
 const INTEGRATE_HANDLE_PREFIX = "merge:";
+// The edge the stage machine names the post-merge move by (stages.advanceId).
+const INTEGRATE_EDGE = "advance:integrate->done";
 
 /** The rule recorded when a breached run limit stops a run. */
 export const RUN_LIMIT_RULE = "R-RUN-LIMIT";
@@ -466,11 +468,20 @@ async function mergeIntegrate({ taskId, deps, state, stage, dispatch }) {
  * merge and the `stage_done` is visible on resume: the engine then asks the VCS
  * whether the merge already happened and only merges again when it did not, or
  * blocks for a human when the VCS cannot say.
+ *
+ * The human-authority policy is asked before anything else: when the
+ * post-merge edge needs a human, the stage machine would refuse the
+ * `stage_done` after the merge anyway, so the engine blocks with R-NEEDS-HUMAN,
+ * appends nothing and never calls the VCS. A merge the policy keeps for a
+ * human is therefore never made by the engine.
  */
 async function integrateStage({ taskId, deps, state, log }) {
   const stage = "integrate";
   if (deps.vcs === null || typeof deps.vcs !== "object" || typeof deps.vcs.merge !== "function") {
     return { status: STEP.BLOCKED, stage, rule: "R-NO-VCS" };
+  }
+  if (humanPolicy(deps)(INTEGRATE_EDGE)) {
+    return { status: STEP.BLOCKED, stage, rule: deps.stages.RULES.NEEDS_HUMAN };
   }
   const dispatch = dispatchFor(deps, stage, taskId);
   const open = openStage(log.events, stage);

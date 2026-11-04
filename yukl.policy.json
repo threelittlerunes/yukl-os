@@ -2,7 +2,7 @@
   "autonomy": {
     "advance-stage-on-gate-pass": "auto",
     "retry-within-limit": "auto",
-    "merge-implementation-pr": "auto",
+    "merge-implementation-pr": "human",
     "stop-on-enforcement": "auto",
     "autonomy-decrease": "auto",
     "autonomy-increase-to-ceiling": "auto",
@@ -17,7 +17,7 @@
   },
   "ceiling": 1,
   "limits": {
-    "maxAttemptsPerStage": 3
+    "maxAttemptsPerStage": 2
   },
   "budgets": {
     "maxWallMinutesPerRun": 120,
