@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -588,7 +588,9 @@ test("an unattended run stops as escalated when its stage hits the attempt limit
     const policy = committedPolicy();
     // The attempt limit is the only stop this run can reach: the wall clock
     // never advances, and the start limit (20) is far above the four attempts
-    // the policy's limit of 3 allows.
+    // the policy's limit of 3 allows. The limit is pinned here, not read from
+    // the committed policy, so the four-start count below stays exact.
+    policy.limits.maxAttemptsPerStage = 3;
     policy.budgets.maxWallMinutesPerRun = 600;
     policy.budgets.maxAgentStartsPerRun = 20;
     const repo = writeRepo(dir, { policy, seed: SEED_TO_IMPLEMENT });
@@ -729,7 +731,11 @@ test("an unmapped edge reaches the policy untouched and fails closed", () => {
 
 test("an integrate merge writes the Yukl-Run-Head trailer with the log head", async () => {
   await withTempDir(async (dir) => {
-    const repo = writeRepo(dir, { seed: SEED_TO_INTEGRATE });
+    // The committed policy keeps the merge for a human; this test exercises
+    // the automatic merge, so it grants it explicitly.
+    const policy = committedPolicy();
+    policy.autonomy["merge-implementation-pr"] = "auto";
+    const repo = writeRepo(dir, { policy, seed: SEED_TO_INTEGRATE });
 
     const scenarioPath = join(dir, "scenario.json");
     const logPath = join(dir, "gh.log");
@@ -779,6 +785,54 @@ test("an integrate merge writes the Yukl-Run-Head trailer with the log head", as
     });
     assert.equal(body, `Yukl-Run-Head: ${TASK} ${expected}`);
     assert.equal(stageDoneTo(repo.stateDir, "done").length, 1);
+  });
+});
+
+test("the committed policy stops integrate for a human and never calls gh pr merge", async () => {
+  await withTempDir(async (dir) => {
+    const repo = writeRepo(dir, { policy: committedPolicy(), seed: SEED_TO_INTEGRATE });
+
+    const scenarioPath = join(dir, "scenario.json");
+    const logPath = join(dir, "gh.log");
+    writeFileSync(
+      scenarioPath,
+      JSON.stringify({
+        "pr checks": { exitCode: 0, stdout: JSON.stringify([{ name: "build", state: "SUCCESS" }]) },
+        "pr view": { exitCode: 0, stdout: JSON.stringify({ baseRefName: "main" }) },
+        "pr merge": { exitCode: 0, stdout: "" },
+      }),
+    );
+    const savedScenario = process.env.FAKE_GH_SCENARIO;
+    const savedLog = process.env.FAKE_GH_LOG;
+    process.env.FAKE_GH_SCENARIO = scenarioPath;
+    process.env.FAKE_GH_LOG = logPath;
+    let out;
+    try {
+      ({ out } = await capture(() =>
+        run([TASK, "--cwd", dir], {
+          createVcs: () => createGithubVcs({ gh: [process.execPath, FAKE_GH], cwd: dir }),
+        }),
+      ));
+    } finally {
+      if (savedScenario === undefined) delete process.env.FAKE_GH_SCENARIO;
+      else process.env.FAKE_GH_SCENARIO = savedScenario;
+      if (savedLog === undefined) delete process.env.FAKE_GH_LOG;
+      else process.env.FAKE_GH_LOG = savedLog;
+    }
+
+    assert.match(out, /R-NEEDS-HUMAN/);
+    const calls = existsSync(logPath)
+      ? readFileSync(logPath, "utf8")
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    assert.equal(
+      calls.some((entry) => entry[0] === "pr" && entry[1] === "merge"),
+      false,
+      "a merge that needs a human must never reach the GitHub CLI",
+    );
+    assert.equal(stageDoneTo(repo.stateDir, "done").length, 0);
   });
 });
 

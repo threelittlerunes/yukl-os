@@ -7,6 +7,16 @@
   "files_touched": [
     ".gitignore",
     ".orchestration/contracts/cloud-yukl-verify-and-safe-fixes.json",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "docs/SDLC_PLAN.md",
+    "docs/YUKL_ARCHITECTURE.md",
+    "scripts/lib/harness.js",
+    "scripts/lifecycle/engine.js",
+    "scripts/repo-checks.js",
+    "tests/agents.test.js",
+    "tests/command-run.test.js",
+    "tests/lifecycle-policy.test.js",
+    "tests/rules.test.js",
+    "yukl.policy.json"
   ]
 }

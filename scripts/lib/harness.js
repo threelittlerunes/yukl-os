@@ -30,6 +30,51 @@ export function readText(relPath, root = ROOT) {
   return readFileSync(join(root, relPath), "utf8");
 }
 
+// A whole line `@<path>` is an agent-doc import: Claude Code replaces it with
+// the named file, so `CLAUDE.md` can hold the single line `@AGENTS.md`.
+const IMPORT_LINE_RE = /^@(\S+)$/;
+const MAX_IMPORT_DEPTH = 5;
+
+/**
+ * Read a markdown file relative to a repository root with its whole-line
+ * `@<path>` imports expanded, so a check sees the text the agent sees. Only a
+ * repository-relative path is expanded: an absolute path, a `~` path or one
+ * with a `..` segment throws, as does an import of a file that does not exist,
+ * an import cycle or nesting deeper than five files. Every other line,
+ * including an `@` inside a sentence, is kept byte for byte.
+ */
+export function readImported(relPath, root = ROOT) {
+  const expand = (path, chain) => {
+    if (chain.includes(path)) {
+      throw new Error(`import cycle: ${[...chain, path].join(" -> ")}`);
+    }
+    if (chain.length > MAX_IMPORT_DEPTH) {
+      throw new Error(`imports nest deeper than ${MAX_IMPORT_DEPTH} files at ${path}`);
+    }
+    const lines = readText(path, root).split("\n");
+    return lines
+      .map((line) => {
+        const match = IMPORT_LINE_RE.exec(line.replace(/\r$/, ""));
+        if (match === null) return line;
+        const target = match[1];
+        if (
+          target.startsWith("/") ||
+          target.startsWith("~") ||
+          /^[A-Za-z]:/.test(target) ||
+          target.split(/[\\/]/).includes("..")
+        ) {
+          throw new Error(`${path}: import "${target}" must be a repository-relative path`);
+        }
+        if (!exists(target, root)) {
+          throw new Error(`${path}: imported file "${target}" does not exist`);
+        }
+        return expand(target, [...chain, path]).replace(/\r?\n$/, "");
+      })
+      .join("\n");
+  };
+  return expand(relPath, []);
+}
+
 /** Parse a JSON file relative to a repository root (see readText). */
 export function readJson(relPath, root = ROOT) {
   return JSON.parse(readText(relPath, root));

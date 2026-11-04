@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readText, readYaml, splitFrontmatter, listRuleFiles } from "../scripts/lib/harness.js";
+import {
+  readImported,
+  readText,
+  readYaml,
+  splitFrontmatter,
+  listRuleFiles,
+} from "../scripts/lib/harness.js";
 import { measure, countInstructions } from "../scripts/repo-checks.js";
 import { validateRules, validateConsistency, validateOrcaYaml } from "../scripts/repo-checks.js";
 
@@ -51,7 +57,9 @@ test("auditor.md is forbidden from a src/** write scope (AF-10)", () => {
 });
 
 test("CLAUDE.md section 2 routes every rule file (V-1)", () => {
-  const text = readText("CLAUDE.md");
+  // CLAUDE.md may be the single import line `@AGENTS.md`; route through the
+  // text the agent loads.
+  const text = readImported("CLAUDE.md");
   for (const file of listRuleFiles()) {
     assert.ok(text.includes(file), `CLAUDE.md does not route ${file}`);
   }
