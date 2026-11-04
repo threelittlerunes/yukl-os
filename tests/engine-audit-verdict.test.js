@@ -27,11 +27,10 @@ const TO_AUDIT = [
 ];
 
 function git(args, cwd) {
-  const result = spawnSync(
-    "git",
-    ["-c", "user.name=Yukl Test", "-c", "user.email=", ...args],
-    { cwd, encoding: "utf8" },
-  );
+  const result = spawnSync("git", ["-c", "user.name=Yukl Test", "-c", "user.email=", ...args], {
+    cwd,
+    encoding: "utf8",
+  });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
