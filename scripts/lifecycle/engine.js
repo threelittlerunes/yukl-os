@@ -39,6 +39,11 @@ const INTEGRATE_RUNTIME_ID = "vcs";
 const INTEGRATE_HANDLE_PREFIX = "merge:";
 // The edge the stage machine names the post-merge move by (stages.advanceId).
 const INTEGRATE_EDGE = "advance:integrate->done";
+// The one stage judged by a committed verdict instead of its exit code.
+const AUDIT_STAGE = "audit";
+const VERDICT_PASS = "pass";
+const VERDICT_FAIL = "fail";
+const FALLBACK_NO_VERDICT_RULE = "R-NO-VERDICT";
 
 /** The rule recorded when a breached run limit stops a run. */
 export const RUN_LIMIT_RULE = "R-RUN-LIMIT";
@@ -305,13 +310,138 @@ async function completeStage({ taskId, deps, state, stage, anchor, actor }) {
   return { status: STEP.ADVANCED, from: stage, to: outcome.next.stage, rule: outcome.rule };
 }
 
-/** Finish an agent stage that reported success through its runtime. */
+/**
+ * The verdict already recorded for the current attempt at `stage`: an
+ * `audit_verdict` appended after the stage's last `stage_started`. A resumed
+ * step reuses it rather than reading and recording the verdict a second time,
+ * so one attempt is counted once by the track record. Null when none.
+ */
+function verdictThisAttempt(events, stage) {
+  let recorded = null;
+  for (const event of events) {
+    if (event?.data?.stage !== stage) continue;
+    if (event.type === "stage_started") recorded = null;
+    else if (event.type === "audit_verdict") recorded = event.data;
+  }
+  return recorded;
+}
+
+/** True when an earlier attempt at `stage` already consumed the verdict at `commit`. */
+function verdictConsumed(events, stage, commit) {
+  return events.some(
+    (event) =>
+      event?.type === "audit_verdict" &&
+      event?.data?.stage === stage &&
+      event?.data?.commit === commit,
+  );
+}
+
+/** True when the caller injected a verdict reader (`yukl run` always does). */
+function hasVerdictReader(deps) {
+  return (
+    deps.verdicts !== null &&
+    typeof deps.verdicts === "object" &&
+    typeof deps.verdicts.read === "function"
+  );
+}
+
+/** Ask the injected verdict reader; anything but a well-formed verdict is not ok. */
+async function readVerdict(deps, request) {
+  const outcome = await deps.verdicts.read(request);
+  if (outcome === null || typeof outcome !== "object" || outcome.ok !== true) {
+    const error = typeof outcome?.error === "string" ? outcome.error : "the verdict is unreadable";
+    return { ok: false, error };
+  }
+  if (outcome.verdict !== VERDICT_PASS && outcome.verdict !== VERDICT_FAIL) {
+    return { ok: false, error: 'the verdict reader returned neither "pass" nor "fail"' };
+  }
+  return outcome;
+}
+
+/**
+ * Judge a finished audit by its committed verdict, not by its exit code.
+ *
+ * The verdict is read at the audit stage's resolved anchor through the
+ * injected `deps.verdicts.read({ stage, taskId, anchor })`. A missing,
+ * unreadable or malformed verdict, and a verdict whose commit an earlier
+ * attempt already consumed, block with R-NO-VERDICT and append nothing: the
+ * stage never passes without a fresh verdict. The composition root
+ * (`yukl run`, scripts/commands/run.js) always injects the reader; a caller
+ * that builds `deps` by hand without one keeps the exit-code rule, which is
+ * the engine's behaviour from before verdicts and what its existing
+ * hand-built environments rely on. A verdict that is read appends
+ * one `audit_verdict` event carrying `verdict` and `runtime` (the shape the
+ * track record counts) plus the stage, the commit and the reasons. "pass"
+ * returns null so the caller completes the stage as before; "fail" goes
+ * through `failStage` with `proofFailed: true`, so diagnosis, the attempt limit
+ * and escalation apply unchanged.
+ */
+async function judgeAudit({ taskId, deps, state, stage, runtime, anchor, result }) {
+  if (!hasVerdictReader(deps)) return null;
+  const noVerdict = deps.stages.RULES?.NO_VERDICT ?? FALLBACK_NO_VERDICT_RULE;
+  const runtimeId = runtimeName(deps, stage, runtime);
+  let current = deps.events.readEvents(deps.events.dir, taskId);
+  let judged = verdictThisAttempt(current.events, stage);
+  if (judged === null) {
+    const read = await readVerdict(deps, { stage, taskId, anchor });
+    if (!read.ok) return { status: STEP.BLOCKED, stage, rule: noVerdict, detail: read.error };
+    const commit = typeof read.commit === "string" ? read.commit : anchor?.commit;
+    if (verdictConsumed(current.events, stage, commit)) {
+      return {
+        status: STEP.BLOCKED,
+        stage,
+        rule: noVerdict,
+        detail: `the verdict at ${commit} was already judged by an earlier attempt`,
+      };
+    }
+    const reasons = Array.isArray(read.reasons) ? read.reasons : [];
+    judged = { stage, runtime: runtimeId, verdict: read.verdict, commit, reasons };
+    append(deps, taskId, { type: "audit_verdict", actor: ENGINE, data: judged });
+    current = deps.events.readEvents(deps.events.dir, taskId);
+  }
+  if (judged.verdict === VERDICT_PASS) return null;
+  const exitCode = typeof result?.exitCode === "number" ? result.exitCode : null;
+  return failStage({
+    taskId,
+    deps,
+    state,
+    log: current,
+    stage,
+    runtimeId,
+    observation: {
+      stage,
+      exitCode,
+      verdict: VERDICT_FAIL,
+      reasons: Array.isArray(judged.reasons) ? judged.reasons : [],
+      proofFailed: true,
+    },
+  });
+}
+
+/**
+ * Finish an agent stage that reported success through its runtime. The audit
+ * stage is judged by its committed verdict after enforcement and the anchor and
+ * before the stage machine (and so self-approval) sees the move; every other
+ * stage completes on the exit code as before.
+ */
 async function completeAgentStage({ taskId, deps, state, stage, runtime, result }) {
   const refusal = await enforceStage({ taskId, deps, state, stage });
   if (refusal !== null) return refusal;
   const anchored = await resolveAnchor(deps, stage, taskId);
   if (!anchored.ok) {
     return { status: STEP.BLOCKED, stage, rule: deps.stages.RULES.NO_ANCHOR };
+  }
+  if (stage === AUDIT_STAGE) {
+    const judged = await judgeAudit({
+      taskId,
+      deps,
+      state,
+      stage,
+      runtime,
+      anchor: anchored.anchor,
+      result,
+    });
+    if (judged !== null) return judged;
   }
   const actor = actorFor(deps, stage, taskId, result);
   return completeStage({ taskId, deps, state, stage, anchor: anchored.anchor, actor });
@@ -668,6 +798,12 @@ function assertDeps(deps) {
  *     (`initialState`, `transition`, `advanceId`, `RULES`, `STAGES`, `TERMINAL`).
  *   - `anchors`: `{ anchorStage(stage, taskId) -> { ok, anchor } }`, resolving
  *     the completed stage's committed artefact `{ path, commit }`.
+ *   - `verdicts`: `{ read({ stage, taskId, anchor }) -> { ok, verdict,
+ *     reasons, commit?, error? } }`, the audit verdict at the audit stage's
+ *     anchor (scripts/lifecycle/verdict.js). Only the `audit` stage reads it.
+ *     `yukl run` always injects it; with it, an audit without a fresh,
+ *     well-formed verdict blocks with R-NO-VERDICT (fail closed). Without it,
+ *     a hand-built environment keeps the exit-code rule.
  *   - `requiresHuman(transitionId, context) -> boolean`, the policy consulted
  *     through the stage machine before an agent edge is allowed.
  *   - `runtime(stage) -> runtime | null`, the runtime adapter for an agent
