@@ -1,0 +1,48 @@
+# Intent for ha-23-retire-orca-yaml. Merged before the implementation
+# pull request, so `yukl verify --base` reads this scope from the base branch.
+
+intent:
+  goal: "Remove `orca.yaml`. No runtime reads it, and it routes the auditor to claude while `yukl.config.json` routes audit to antigravity. Delete the file, `validateOrcaYaml` and its call, and its entries in REQUIRED_FILES, SCAN_FILES and package.json `files`. The check that every rule file is routed stays as V-1 in `validateRules`, which already runs in the build. So that removing the file does not remove the only agent-name check on a runtime route, `lifecycle.runtimes` agents in `yukl.config.json` are validated against ALLOWED_AGENTS."
+  depends_on: []
+  scope:
+    allowed_paths:
+      - "orca.yaml"
+      - "package.json"
+      - "scripts/repo-checks.js"
+      - "scripts/validate-config.js"
+      - "tests/config.test.js"
+      - "tests/rules.test.js"
+      - "CHANGELOG.md"
+      - ".orchestration/contracts/ha-23-retire-orca-yaml.json"
+    forbidden_paths:
+      - ".orchestration/intents/**"
+      - ".github/**"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "flow.config.json"
+      - "review.config.json"
+      - "yukl.config.json"
+      - "yukl.policy.json"
+      - ".claude/rules/**"
+      - "scripts/lifecycle/**"
+      - "scripts/adapters/**"
+  design_constraints:
+    - "`flow.config.json` and `review.config.json` stay, with their content unchanged. `yukl render` and the fallback in scripts/yukl.js read them; whether they stay is a separate decision."
+    - "V-1 in `validateRules` is unchanged and is not weakened. V-2 is retired with the file, because V-1 already fails the build when a rule file is not routed."
+    - "The new `lifecycle.runtimes` agent check reports through the existing error list of scripts/validate-config.js, so an unknown agent fails `npm run build`."
+    - "ALLOWED_AGENTS keeps its current members. Removing `opencode` is a separate decision."
+    - "Test changes are limited to the ones listed here, each a [Legacy Test Migration] the repository owner approved in this intent: in tests/config.test.js remove the `validateOrcaYaml` import, the `orca.yaml` read and assertion and the `validateOrcaYaml` assertion in the routing-omp test (keeping its flow.config.json and yukl.config.json assertions, and renaming it only to drop `orca.yaml` from the title), and remove the test `orca.yaml is structurally cross-checked against flow.config.json and the contract schema`; in tests/rules.test.js remove the `validateOrcaYaml` import and the test `orca.yaml lists every rule file under an agent (V-2)`. Any other existing test that needs a change stops the work and is reported."
+    - "Historical records that mention `orca.yaml` (past intents and contracts, docs/AUDIT_REPORT.md, VERDICT_PROMPT.md, INTENT.md) are not rewritten."
+    - "en-GB, hyphens only, no em or en dashes in added text."
+  acceptance:
+    - "npm run build, npm run test and npm run format:check exit 0 on a clean checkout."
+    - "node scripts/yukl.js verify --base origin/main exits 0 with every check PASS."
+    - "`orca.yaml` and `validateOrcaYaml` no longer exist, and no file under scripts/ or tests/ or in package.json names either."
+    - "A new test in tests/config.test.js shows an unknown agent in `lifecycle.runtimes` is rejected and the shipped `yukl.config.json` is accepted."
+    - "Deliberate fault: with the new agent check removed, that test fails."
+    - "Deliberate fault: with one rule file removed from the routing section, V-1 still fails the build."
+
+consultation:
+  requires_human_approval: true
+  tier: T2
+  reason: "Removes a shipped file and a validator, and changes named existing tests, so the repository owner approves the test changes and the merge."
